@@ -184,6 +184,11 @@ func translate(_ text: String, completion: @escaping (String?, String?) -> Void)
 
 // MARK: - 冒泡/译文浮窗
 
+// 可成为 key 的浮窗:让用户能在结果里拖选译文 + ⌘C
+final class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 // 悬浮按钮:无边框,hover/按下时浮起高亮(系统菜单项的交互语言)
 final class HoverButton: NSButton {
     private var trackingAreaRef: NSTrackingArea?
@@ -244,6 +249,8 @@ final class PopupController {
     private var panel: NSPanel?
     private var body: NSView?
     private var pendingText: String?
+    private var lastResult: String?
+    private weak var copyButton: HoverButton?
     private let appearDur: TimeInterval = 0.14
     private let dismissDur: TimeInterval = 0.10
     private let switchDur: TimeInterval = 0.16
@@ -311,8 +318,22 @@ final class PopupController {
             if let errMsg = errMsg {
                 self.showMessage(errMsg, isError: true)
             } else {
-                self.showMessage(result ?? "(空)", isError: false)
+                self.showMessage(result ?? "(空)", isError: false, showCopy: true)
             }
+        }
+    }
+
+    @objc private func onCopyClicked() {
+        guard let s = lastResult else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(s, forType: .string)
+        copyButton?.labelText = "已复制 ✓"
+        copyButton?.needsDisplay = true
+        let btn = copyButton
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            btn?.labelText = "复制"
+            btn?.needsDisplay = true
         }
     }
 
@@ -328,11 +349,15 @@ final class PopupController {
         return ceil(lm.usedRect(for: container).height)
     }
 
-    private func showMessage(_ message: String, isError: Bool) {
+    private func showMessage(_ message: String, isError: Bool, showCopy: Bool = false) {
+        lastResult = showCopy ? message : nil
+        copyButton = nil
         let origin = panel?.frame.origin ?? NSEvent.mouseLocation
 
         let w: CGFloat = 420
         let pad: CGFloat = 14
+        let footerH: CGFloat = 36
+        let bottomInset: CGFloat = showCopy ? footerH : pad
         let textW = w - pad * 2
         let font = NSFont.systemFont(ofSize: 14)
         let textColor = isError ? NSColor.systemRed : NSColor.labelColor
@@ -342,10 +367,10 @@ final class PopupController {
         let screenH = NSScreen.main?.visibleFrame.height ?? 800
         let maxContentH = min(440, screenH - 140)
         let visibleH = min(contentH, maxContentH)
-        let panelH = visibleH + pad * 2
+        let panelH = pad + visibleH + bottomInset
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: w, height: panelH))
-        let scroll = NSScrollView(frame: NSRect(x: pad, y: pad, width: textW, height: visibleH))
+        let scroll = NSScrollView(frame: NSRect(x: pad, y: bottomInset, width: textW, height: visibleH))
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = contentH > maxContentH
@@ -370,6 +395,21 @@ final class PopupController {
         scroll.documentView = tv
         container.addSubview(scroll)
 
+        // 译文结果:底部加分隔线 + 「复制」按钮
+        if showCopy {
+            let line = NSView(frame: NSRect(x: pad, y: footerH, width: textW, height: 1))
+            line.wantsLayer = true
+            line.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+            container.addSubview(line)
+            let cbW: CGFloat = 70, cbH: CGFloat = 24
+            let cb = HoverButton(frame: NSRect(x: w - pad - cbW, y: (footerH - cbH) / 2, width: cbW, height: cbH))
+            cb.labelText = "复制"
+            cb.target = self
+            cb.action = #selector(onCopyClicked)
+            container.addSubview(cb)
+            copyButton = cb
+        }
+
         var rect = NSRect(x: origin.x, y: origin.y, width: w, height: panelH)
         rect = clampToScreen(rect)
         present(content: container, rect: rect)
@@ -377,7 +417,7 @@ final class PopupController {
     }
 
     private func makePanel(_ rect: NSRect) -> NSPanel {
-        let p = NSPanel(contentRect: rect,
+        let p = KeyablePanel(contentRect: rect,
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
         p.isFloatingPanel = true
@@ -425,6 +465,7 @@ final class PopupController {
 // MARK: - 全局鼠标事件 tap(CGEventTap)+ 自愈 + 授权后重建
 
 var gDownLoc: CGPoint = .zero
+var gDownInsidePopup = false
 var gEventTap: CFMachPort?
 var gRunLoopSource: CFRunLoopSource?
 var gTapPollTimer: Timer?
@@ -461,10 +502,12 @@ let gEventCallback: CGEventTapCallBack = { _, type, event, _ in
     if type == .leftMouseDown {
         gDownLoc = loc
         DispatchQueue.main.async {
-            if let ad = gAppDelegate, ad.popup.isVisible {
-                let m = NSEvent.mouseLocation
-                if let f = ad.popup.frame(), !f.insetBy(dx: -6, dy: -6).contains(m) {
-                    ad.popup.dismiss()
+            gDownInsidePopup = false
+            if let ad = gAppDelegate, ad.popup.isVisible, let f = ad.popup.frame() {
+                if f.insetBy(dx: -6, dy: -6).contains(NSEvent.mouseLocation) {
+                    gDownInsidePopup = true        // 点在浮窗内:让用户选字/点按钮,不关、不当作新划词
+                } else {
+                    ad.popup.dismiss()             // 点在浮窗外:失焦关闭
                 }
             }
         }
@@ -472,7 +515,10 @@ let gEventCallback: CGEventTapCallBack = { _, type, event, _ in
         let dx = loc.x - gDownLoc.x
         let dy = loc.y - gDownLoc.y
         let dist = (dx*dx + dy*dy).squareRoot()
-        DispatchQueue.main.async { handleMouseUpAt(dist: dist) }
+        DispatchQueue.main.async {
+            if gDownInsidePopup { gDownInsidePopup = false; return }  // 在浮窗里的拖选,不触发新气泡
+            handleMouseUpAt(dist: dist)
+        }
     }
     return Unmanaged.passUnretained(event)
 }
