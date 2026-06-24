@@ -10,7 +10,15 @@ cd "$HERE"
 APP="popdict.app"
 BUNDLE_ID="com.yoryon.popdict"
 MIN_OS="12.0"
-SIGN_IDENTITY="${1:--}"   # 默认 "-" 即 adhoc
+
+# 选签名身份:命令行指定 > 固定自签名证书(更新不丢权限)> adhoc
+if [ -n "$1" ]; then
+    SIGN_IDENTITY="$1"
+elif security find-identity -p codesigning 2>/dev/null | grep -q "PopDict Self Signed"; then
+    SIGN_IDENTITY="PopDict Self Signed"
+else
+    SIGN_IDENTITY="-"
+fi
 
 echo "==> 1/5 编译 universal 二进制 (arm64 + x86_64)"
 swiftc main.swift -target arm64-apple-macos${MIN_OS}  -o /tmp/popdict_arm64 -swift-version 5 -framework AppKit -framework ApplicationServices -O

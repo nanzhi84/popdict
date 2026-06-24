@@ -184,40 +184,123 @@ func translate(_ text: String, completion: @escaping (String?, String?) -> Void)
 
 // MARK: - 冒泡/译文浮窗
 
+// 悬浮按钮:无边框,hover/按下时浮起高亮(系统菜单项的交互语言)
+final class HoverButton: NSButton {
+    private var trackingAreaRef: NSTrackingArea?
+    private var hovering = false { didSet { needsDisplay = true } }
+    private var pressing = false { didSet { needsDisplay = true } }
+    var labelText = "🌐 翻译"
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        title = ""
+        wantsLayer = true
+        focusRingType = .none
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = trackingAreaRef { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
+        addTrackingArea(t)
+        trackingAreaRef = t
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; pressing = false }
+    override func mouseDown(with event: NSEvent) { pressing = true }
+    override func mouseDragged(with event: NSEvent) {
+        pressing = bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+    override func mouseUp(with event: NSEvent) {
+        let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+        pressing = false
+        if inside, let action = action, let target = target {
+            NSApp.sendAction(action, to: target, from: self)
+        }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        if pressing || hovering {
+            let bg = NSBezierPath(roundedRect: bounds.insetBy(dx: 3, dy: 3), xRadius: 6, yRadius: 6)
+            NSColor.selectedContentBackgroundColor.withAlphaComponent(pressing ? 0.45 : 0.20).setFill()
+            bg.fill()
+        }
+        let color = (hovering || pressing) ? NSColor.labelColor : NSColor.secondaryLabelColor
+        let para = NSMutableParagraphStyle(); para.alignment = .center
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: color,
+            .paragraphStyle: para
+        ]
+        let s = labelText as NSString
+        let size = s.size(withAttributes: attrs)
+        let r = NSRect(x: 0, y: (bounds.height - size.height) / 2, width: bounds.width, height: size.height)
+        s.draw(in: r, withAttributes: attrs)
+    }
+}
+
 final class PopupController {
     private var panel: NSPanel?
+    private var body: NSView?
     private var pendingText: String?
-
-    func dismiss() {
-        panel?.orderOut(nil)
-        panel = nil
-        pendingText = nil
-    }
+    private let appearDur: TimeInterval = 0.14
+    private let dismissDur: TimeInterval = 0.10
+    private let switchDur: TimeInterval = 0.16
 
     var isVisible: Bool { panel != nil }
     func frame() -> NSRect? { panel?.frame }
 
+    func dismiss() {
+        guard let p = panel else { return }
+        panel = nil; body = nil; pendingText = nil
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = self.dismissDur
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            p.animator().alphaValue = 0
+        }, completionHandler: { p.orderOut(nil) })
+    }
+
     func showButton(at point: NSPoint, text: String) {
-        dismiss()
         pendingText = text
-
-        let w: CGFloat = 92, h: CGFloat = 30
+        let w: CGFloat = 96, h: CGFloat = 32
         let rect = placedRect(near: point, w: w, h: h)
-        let p = makePanel(rect)
-
-        let btnH: CGFloat = 22
-        let btnY = (h - btnH) / 2
-        let btn = NSButton(frame: NSRect(x: 6, y: btnY, width: w - 12, height: btnH))
-        btn.title = "🌐 翻译"
-        btn.bezelStyle = .rounded
-        btn.font = NSFont.systemFont(ofSize: 13)
+        let btn = HoverButton(frame: NSRect(x: 0, y: 0, width: w, height: h))
         btn.target = self
         btn.action = #selector(onTranslateClicked)
-        btn.isBordered = true
-        p.contentView?.addSubview(btn)
+        present(content: btn, rect: rect)
+    }
 
-        panel = p
-        p.orderFrontRegardless()
+    // 首次显示淡入;已有面板则平滑改尺寸 + 内容 crossfade
+    private func present(content newBody: NSView, rect: NSRect) {
+        if let p = panel, let blur = p.contentView {
+            newBody.frame = NSRect(origin: .zero, size: rect.size)
+            newBody.alphaValue = 0
+            blur.addSubview(newBody)
+            let old = body
+            body = newBody
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = self.switchDur
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                ctx.allowsImplicitAnimation = true
+                p.animator().setFrame(rect, display: true)
+                old?.animator().alphaValue = 0
+                newBody.animator().alphaValue = 1
+            }, completionHandler: { old?.removeFromSuperview() })
+        } else {
+            let p = makePanel(rect)
+            newBody.frame = NSRect(origin: .zero, size: rect.size)
+            p.contentView?.addSubview(newBody)
+            body = newBody
+            panel = p
+            p.alphaValue = 0
+            p.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = self.appearDur
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                p.animator().alphaValue = 1
+            })
+        }
     }
 
     @objc private func onTranslateClicked() {
@@ -247,8 +330,6 @@ final class PopupController {
 
     private func showMessage(_ message: String, isError: Bool) {
         let origin = panel?.frame.origin ?? NSEvent.mouseLocation
-        panel?.orderOut(nil)
-        panel = nil
 
         let w: CGFloat = 420
         let pad: CGFloat = 14
@@ -263,6 +344,7 @@ final class PopupController {
         let visibleH = min(contentH, maxContentH)
         let panelH = visibleH + pad * 2
 
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: w, height: panelH))
         let scroll = NSScrollView(frame: NSRect(x: pad, y: pad, width: textW, height: visibleH))
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -286,13 +368,11 @@ final class PopupController {
         tv.textContainer?.containerSize = NSSize(width: textW, height: .greatestFiniteMagnitude)
         tv.textContainer?.widthTracksTextView = true
         scroll.documentView = tv
+        container.addSubview(scroll)
 
         var rect = NSRect(x: origin.x, y: origin.y, width: w, height: panelH)
         rect = clampToScreen(rect)
-        let p = makePanel(rect)
-        p.contentView?.addSubview(scroll)
-        panel = p
-        p.orderFrontRegardless()
+        present(content: container, rect: rect)
         tv.scrollRangeToVisible(NSRange(location: 0, length: 0))
     }
 
@@ -306,14 +386,20 @@ final class PopupController {
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
+        p.animationBehavior = .none
 
-        let container = NSView(frame: NSRect(origin: .zero, size: rect.size))
-        container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.98).cgColor
-        container.layer?.cornerRadius = 10
-        container.layer?.borderWidth = 1
-        container.layer?.borderColor = NSColor.separatorColor.cgColor
-        p.contentView = container
+        // 毛玻璃背板:.menu 材质 + behindWindow 实时模糊;圆角靠父 layer 裁切,阴影交给系统
+        let blur = NSVisualEffectView(frame: NSRect(origin: .zero, size: rect.size))
+        blur.material = .menu
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = 9
+        blur.layer?.masksToBounds = true
+        blur.layer?.borderWidth = 1
+        blur.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        blur.autoresizingMask = [.width, .height]
+        p.contentView = blur
         return p
     }
 
