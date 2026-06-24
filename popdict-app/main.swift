@@ -233,33 +233,67 @@ final class PopupController {
         }
     }
 
+    // 真实测量换行后文本高度(NSTextField.sizeToFit 对多行不准)
+    private func measuredTextHeight(_ s: String, font: NSFont, width: CGFloat) -> CGFloat {
+        let storage = NSTextStorage(string: s, attributes: [.font: font])
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        let lm = NSLayoutManager()
+        lm.addTextContainer(container)
+        storage.addLayoutManager(lm)
+        lm.ensureLayout(for: container)
+        return ceil(lm.usedRect(for: container).height)
+    }
+
     private func showMessage(_ message: String, isError: Bool) {
         let origin = panel?.frame.origin ?? NSEvent.mouseLocation
         panel?.orderOut(nil)
         panel = nil
 
-        let w: CGFloat = 380
+        let w: CGFloat = 420
+        let pad: CGFloat = 14
+        let textW = w - pad * 2
+        let font = NSFont.systemFont(ofSize: 14)
         let textColor = isError ? NSColor.systemRed : NSColor.labelColor
 
-        let field = NSTextField(wrappingLabelWithString: message)
-        field.font = NSFont.systemFont(ofSize: 14)
-        field.textColor = textColor
-        field.isSelectable = true
-        field.isEditable = false
-        field.drawsBackground = false
-        field.preferredMaxLayoutWidth = w - 24
-        field.frame = NSRect(x: 12, y: 12, width: w - 24, height: 10)
-        field.sizeToFit()
-        let textH = field.frame.height
-        let h = max(48, textH + 24)
-        field.frame = NSRect(x: 12, y: 12, width: w - 24, height: textH)
+        // 测真实高度,超过上限就用滚动条(应对超长译文 + 换行)
+        let contentH = max(20, measuredTextHeight(message, font: font, width: textW))
+        let screenH = NSScreen.main?.visibleFrame.height ?? 800
+        let maxContentH = min(440, screenH - 140)
+        let visibleH = min(contentH, maxContentH)
+        let panelH = visibleH + pad * 2
 
-        var rect = NSRect(x: origin.x, y: origin.y, width: w, height: h)
+        let scroll = NSScrollView(frame: NSRect(x: pad, y: pad, width: textW, height: visibleH))
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = contentH > maxContentH
+        scroll.autohidesScrollers = true
+
+        let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: textW, height: contentH))
+        tv.string = message
+        tv.font = font
+        tv.textColor = textColor
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.drawsBackground = false
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.minSize = NSSize(width: textW, height: visibleH)
+        tv.maxSize = NSSize(width: textW, height: .greatestFiniteMagnitude)
+        tv.autoresizingMask = [.width]
+        tv.textContainer?.containerSize = NSSize(width: textW, height: .greatestFiniteMagnitude)
+        tv.textContainer?.widthTracksTextView = true
+        scroll.documentView = tv
+
+        var rect = NSRect(x: origin.x, y: origin.y, width: w, height: panelH)
         rect = clampToScreen(rect)
         let p = makePanel(rect)
-        p.contentView?.addSubview(field)
+        p.contentView?.addSubview(scroll)
         panel = p
         p.orderFrontRegardless()
+        tv.scrollRangeToVisible(NSRange(location: 0, length: 0))
     }
 
     private func makePanel(_ rect: NSRect) -> NSPanel {
