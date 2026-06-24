@@ -1,0 +1,14 @@
+# 编译产物 / 打包产物(不进仓库)
+*.app/
+*.dmg
+*.popclipextz
+popdict-app/popdict_test
+popdict-app/popdict
+/tmp/
+
+# 密钥与本地配置(绝不上传)
+**/deepseek_key
+*.key
+
+# macOS
+.DS_Store

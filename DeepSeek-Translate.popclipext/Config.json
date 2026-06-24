@@ -1,0 +1,29 @@
+{
+  "identifier": "com.yoryon.deepseek-translate",
+  "name": "DeepSeek 翻译",
+  "icon": "🌐",
+  "description": "选中文字用 DeepSeek 翻译:中文→英文,其它语言→简体中文",
+  "options": [
+    {
+      "identifier": "apikey",
+      "label": "DeepSeek API Key",
+      "type": "string",
+      "description": "在 platform.deepseek.com 获取的 API Key"
+    },
+    {
+      "identifier": "model",
+      "label": "模型",
+      "type": "string",
+      "default value": "deepseek-chat",
+      "description": "默认 deepseek-chat,够用且便宜"
+    }
+  ],
+  "action": {
+    "title": "DeepSeek 翻译",
+    "icon": "🌐",
+    "requirements": ["text"],
+    "entitlements": ["network"],
+    "javascript file": "translate.js",
+    "after": "show-result"
+  }
+}
