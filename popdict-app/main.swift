@@ -318,7 +318,7 @@ final class PopupController {
             if let errMsg = errMsg {
                 self.showMessage(errMsg, isError: true)
             } else {
-                self.showMessage(result ?? "(空)", isError: false, showCopy: true)
+                self.showMessage(result ?? "(空)", isError: false, showCopy: true, markdown: true)
             }
         }
     }
@@ -337,9 +337,9 @@ final class PopupController {
         }
     }
 
-    // 真实测量换行后文本高度(NSTextField.sizeToFit 对多行不准)
-    private func measuredTextHeight(_ s: String, font: NSFont, width: CGFloat) -> CGFloat {
-        let storage = NSTextStorage(string: s, attributes: [.font: font])
+    // 真实测量换行后文本高度(对富文本同样准确)
+    private func measuredTextHeight(_ attr: NSAttributedString, width: CGFloat) -> CGFloat {
+        let storage = NSTextStorage(attributedString: attr)
         let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
         let lm = NSLayoutManager()
@@ -349,7 +349,24 @@ final class PopupController {
         return ceil(lm.usedRect(for: container).height)
     }
 
-    private func showMessage(_ message: String, isError: Bool, showCopy: Bool = false) {
+    // 把简单 markdown(粗体/斜体/等宽代码/链接)渲染成富文本;字号统一为 baseFont 并保留粗斜等 traits
+    private func attributedMarkdown(_ s: String, baseFont: NSFont, color: NSColor) -> NSAttributedString {
+        let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        guard let base = try? NSAttributedString(markdown: s, options: opts) else {
+            return NSAttributedString(string: s, attributes: [.font: baseFont, .foregroundColor: color])
+        }
+        let attr = NSMutableAttributedString(attributedString: base)
+        let full = NSRange(location: 0, length: attr.length)
+        attr.addAttribute(.foregroundColor, value: color, range: full)
+        attr.enumerateAttribute(.font, in: full, options: []) { value, range, _ in
+            let f = (value as? NSFont) ?? baseFont
+            let resized = NSFont(descriptor: f.fontDescriptor, size: baseFont.pointSize) ?? baseFont
+            attr.addAttribute(.font, value: resized, range: range)
+        }
+        return attr
+    }
+
+    private func showMessage(_ message: String, isError: Bool, showCopy: Bool = false, markdown: Bool = false) {
         lastResult = showCopy ? message : nil
         copyButton = nil
         let origin = panel?.frame.origin ?? NSEvent.mouseLocation
@@ -362,8 +379,13 @@ final class PopupController {
         let font = NSFont.systemFont(ofSize: 14)
         let textColor = isError ? NSColor.systemRed : NSColor.labelColor
 
+        // 译文按简单 markdown 渲染;其它(翻译中/错误)纯文本
+        let attr = markdown
+            ? attributedMarkdown(message, baseFont: font, color: textColor)
+            : NSAttributedString(string: message, attributes: [.font: font, .foregroundColor: textColor])
+
         // 测真实高度,超过上限就用滚动条(应对超长译文 + 换行)
-        let contentH = max(20, measuredTextHeight(message, font: font, width: textW))
+        let contentH = max(20, measuredTextHeight(attr, width: textW))
         let screenH = NSScreen.main?.visibleFrame.height ?? 800
         let maxContentH = min(440, screenH - 140)
         let visibleH = min(contentH, maxContentH)
@@ -377,12 +399,10 @@ final class PopupController {
         scroll.autohidesScrollers = true
 
         let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: textW, height: contentH))
-        tv.string = message
-        tv.font = font
-        tv.textColor = textColor
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = false
+        tv.textColor = textColor
         tv.textContainerInset = .zero
         tv.textContainer?.lineFragmentPadding = 0
         tv.isVerticallyResizable = true
@@ -392,6 +412,7 @@ final class PopupController {
         tv.autoresizingMask = [.width]
         tv.textContainer?.containerSize = NSSize(width: textW, height: .greatestFiniteMagnitude)
         tv.textContainer?.widthTracksTextView = true
+        tv.textStorage?.setAttributedString(attr)
         scroll.documentView = tv
         container.addSubview(scroll)
 
