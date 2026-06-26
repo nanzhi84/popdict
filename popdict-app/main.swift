@@ -1279,6 +1279,19 @@ final class HotKey {
     }
 }
 
+// macOS Tahoe 26 起会自动给「标准动作」菜单项配图标(如「设置…」的齿轮)。一旦有图标,
+// 整个菜单就多出一列「图标列」,其它无图标项的文字被顶右、看着缩进。本 App 不需要任何菜单图标,
+// 故全局把 NSMenuItem.image 的 getter 交换成返回 nil(自动图标读不到 image 就不画)。
+// 参考 Brent Simmons / NetNewsWire 的做法。
+extension NSMenuItem {
+    @objc func popdict_nilImage() -> NSImage? { nil }
+    static func popdictDisableAutoIcons() {
+        guard let o = class_getInstanceMethod(NSMenuItem.self, #selector(getter: NSMenuItem.image)),
+              let r = class_getInstanceMethod(NSMenuItem.self, #selector(NSMenuItem.popdict_nilImage)) else { return }
+        method_exchangeImplementations(o, r)
+    }
+}
+
 // MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -1289,6 +1302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var activeCapture: RegionCapture?      // 截图期间强持有 RegionCapture,避免遮罩提前释放
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSMenuItem.popdictDisableAutoIcons()   // 关掉 macOS 26 的菜单自动图标(否则「设置…」齿轮致整菜单缩进)
         ensureConfigDir()
         AppConfig.shared.load()
         logLine("=== launch AX_TRUSTED=\(AXIsProcessTrusted()) configDir=\(FileManager.default.fileExists(atPath: kConfigDir)) ===")
@@ -1349,9 +1363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: scrOK ? "✓ 屏幕录制:已授权" : "⚠️ 屏幕录制:未授权(截图解释需要)",
                                 action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        // 标题不用纯「设置…」:macOS 26 会按标题精确匹配「设置…」自动加齿轮图标,
-        // 一旦有图标整菜单就多出图标列、其它项看着缩进。用「厂商设置…」绕开(同「辅助功能权限设置…」不触发)。
-        menu.addItem(NSMenuItem(title: "厂商设置…", action: #selector(openSettings), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "辅助功能权限设置…", action: #selector(openAXSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "屏幕录制权限设置…", action: #selector(openScreenRecordingSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "重新检查权限", action: #selector(recheck), keyEquivalent: ""))
