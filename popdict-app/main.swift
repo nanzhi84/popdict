@@ -1281,7 +1281,7 @@ final class HotKey {
 
 // MARK: - AppDelegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     let popup = PopupController()
     let settings = SettingsController()
     var statusItem: NSStatusItem?
@@ -1349,11 +1349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(NSMenuItem(title: scrOK ? "✓ 屏幕录制:已授权" : "⚠️ 屏幕录制:未授权(截图解释需要)",
                                 action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        let shot = NSMenuItem(title: "📷 截图解释  ⌃⌥E", action: #selector(onScreenshotExplain), keyEquivalent: "")
-        shot.target = self   // 显式 target,确保 validateMenuItem 被调用(不支持看图时灰掉)
-        menu.addItem(shot)
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ","))
-        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "辅助功能权限设置…", action: #selector(openAXSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "屏幕录制权限设置…", action: #selector(openScreenRecordingSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "重新检查权限", action: #selector(recheck), keyEquivalent: ""))
@@ -1450,14 +1446,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc func openSettings() { settings.show() }
-
-    // 当前厂商不支持看图时,菜单「📷 截图解释」灰掉
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(onScreenshotExplain) {
-            return AppConfig.shared.active?.vision == true
-        }
-        return true
-    }
 
     @objc func recheck() {
         logLine("manual recheck AX_TRUSTED=\(AXIsProcessTrusted())")
