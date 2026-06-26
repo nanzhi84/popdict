@@ -3,17 +3,25 @@ import ApplicationServices
 import os.log
 
 // ============================================================
-// popdict —— 划词翻译 / 解释 菜单栏小程序
-// 选中文字 → 选区旁冒泡「🌐 翻译」「💡 解释」→ 点击 → DeepSeek → 同处显示结果
+// popdict —— 划词翻译 / 解释 / 截图解释 菜单栏小程序
+// 选中文字 → 选区旁冒泡「🌐 翻译」「💡 解释」→ 点击 → MiMo → 同处显示结果
 //   翻译:含中文 → 英文;其它 → 简体中文
-//   解释:用简体中文把概念/代码讲明白,DeepSeek 流式逐字输出(打字机)
+//   解释:用简体中文把概念/代码讲明白,MiMo 流式逐字输出(打字机)
+//   截图解释:⌃⌥E / 菜单「📷 截图解释」框选屏幕 → MiMo 多模态看图讲解(可追问)
 // ============================================================
 
 // MARK: - 路径 / 配置目录(最先初始化,保证日志可写)
 
 let kConfigDir = (("~/.config/popdict" as NSString).expandingTildeInPath)
 let kLogPath = kConfigDir + "/popdict.log"
-let kKeyPath = kConfigDir + "/deepseek_key"
+let kKeyPath = kConfigDir + "/mimo_key"          // 原 deepseek_key,已全量切到 MiMo
+
+// MARK: - 模型后端(小米 MiMo,OpenAI 兼容)
+
+let kAPIBase = "https://api.xiaomimimo.com/v1"
+let kChatPath = "/chat/completions"              // 完整地址 = kAPIBase + kChatPath
+let kModel = "mimo-v2.5"                          // 多模态:同时管文字翻译/解释与看图
+let kMaxTokens = 4096
 
 @discardableResult
 func ensureConfigDir() -> Bool {
@@ -187,26 +195,28 @@ func selectedTextViaCopy() -> String? {
     return nil
 }
 
-// MARK: - 翻译(DeepSeek)
+// MARK: - 翻译(MiMo)
 
 func translate(_ text: String, completion: @escaping (String?, String?) -> Void) {
     guard let apiKey = readAPIKey() else {
-        completion(nil, "没找到 API Key。请把 DeepSeek Key 写进:\n\(kKeyPath)")
+        completion(nil, "没找到 API Key。请把 MiMo Key 写进:\n\(kKeyPath)")
         return
     }
     let target = hasChinese(text) ? "English" : "Simplified Chinese"
     let sys = "You are a professional translation engine. Translate the user's text into \(target). Output ONLY the translation itself — no explanations, no quotes, no extra words."
 
     let body: [String: Any] = [
-        "model": "deepseek-chat",
+        "model": kModel,
         "messages": [
             ["role": "system", "content": sys],
             ["role": "user", "content": text]
         ],
         "temperature": 0.3,
+        "max_completion_tokens": kMaxTokens,
+        "thinking": ["type": "disabled"],
         "stream": false
     ]
-    guard let url = URL(string: "https://api.deepseek.com/chat/completions"),
+    guard let url = URL(string: kAPIBase + kChatPath),
           let data = try? JSONSerialization.data(withJSONObject: body) else {
         completion(nil, "请求构造失败"); return
     }
@@ -223,7 +233,7 @@ func translate(_ text: String, completion: @escaping (String?, String?) -> Void)
             return
         }
         if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
-            DispatchQueue.main.async { completion(nil, "DeepSeek 出错(HTTP \(http.statusCode)),请检查 Key 或余额") }
+            DispatchQueue.main.async { completion(nil, "MiMo 出错(HTTP \(http.statusCode)),请检查 Key 或余额") }
             return
         }
         guard let respData = respData,
@@ -239,13 +249,14 @@ func translate(_ text: String, completion: @escaping (String?, String?) -> Void)
     }.resume()
 }
 
-// MARK: - 解释 / 追问(DeepSeek 流式 / SSE)
+// MARK: - 解释 / 追问(MiMo 流式 / SSE)
 
 // 解释用的 system prompt(自适应:代码拆解、概念大白话;短则短答长则分点)
 let kExplainSystem = """
 你是一个善于把复杂概念和代码讲清楚的助手。请用简体中文解释用户给出的内容,帮他真正理解。
 - 如果是代码:先说它整体在做什么,再逐步拆解关键逻辑,点出涉及的语法、库或设计意图,必要时给一句类比或小例子。
 - 如果是术语或概念:用大白话讲清它是什么、为什么重要、怎么用。
+- 如果是图片:先一句说清这张图整体是什么(截图/图表/报错/界面/照片/文档…),再解读其中关键信息。报错或代码截图就定位问题并给排查/解决方向;图表就读出趋势与要点;界面或流程就说清它在干什么。
 - 内容简短就简短回答(几句话点透),内容复杂就分点详解。
 - 直接开始,不要寒暄,不要复述原文。可以用 markdown(## 小标题、**加粗**、`代码`、- 列表、```代码块```)让层次清晰。
 - 后续若有追问,延续上下文回答。
@@ -259,16 +270,18 @@ func chatStream(_ messages: [[String: String]],
                 onDone: @escaping (String) -> Void,
                 onError: @escaping (String) -> Void) -> Task<Void, Never>? {
     guard let apiKey = readAPIKey() else {
-        onError("没找到 API Key。请把 DeepSeek Key 写进:\n\(kKeyPath)")
+        onError("没找到 API Key。请把 MiMo Key 写进:\n\(kKeyPath)")
         return nil
     }
     let body: [String: Any] = [
-        "model": "deepseek-chat",
+        "model": kModel,
         "messages": messages,
         "temperature": 0.5,
+        "max_completion_tokens": kMaxTokens,
+        "thinking": ["type": "disabled"],
         "stream": true
     ]
-    guard let url = URL(string: "https://api.deepseek.com/chat/completions"),
+    guard let url = URL(string: kAPIBase + kChatPath),
           let data = try? JSONSerialization.data(withJSONObject: body) else {
         onError("请求构造失败"); return nil
     }
@@ -285,7 +298,7 @@ func chatStream(_ messages: [[String: String]],
         do {
             let (bytes, resp) = try await URLSession.shared.bytes(for: req)
             if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
-                await MainActor.run { onError("DeepSeek 出错(HTTP \(http.statusCode)),请检查 Key 或余额") }
+                await MainActor.run { onError("MiMo 出错(HTTP \(http.statusCode)),请检查 Key 或余额") }
                 return
             }
             for try await line in bytes.lines {
@@ -307,7 +320,7 @@ func chatStream(_ messages: [[String: String]],
             let full = accum
             await MainActor.run {
                 if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    onError("DeepSeek 没有返回内容")
+                    onError("MiMo 没有返回内容")
                 } else {
                     onDone(full)
                 }
