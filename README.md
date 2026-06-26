@@ -1,116 +1,188 @@
-# popdict · 划词翻译 / 解释 / 截图解释
+<div align="center">
 
-> 在 Mac 上**选中文字 → 旁边自动冒出「🌐 翻译」「💡 解释」两个按钮 → 点一下出结果**;
-> 还能**框选屏幕任意区域,让 AI 看图讲解**。免费、原生、不依赖任何第三方软件。
-> 原生 App 在「设置」里选模型厂商:预置 [小米 MiMo](https://platform.xiaomimimo.com/)、[DeepSeek](https://platform.deepseek.com/)(都是 OpenAI 兼容,可自己加更多);看图讲解需用支持看图的厂商(如 MiMo)。
-> 另两种实现(PopClip / Hammerspoon)仍走 DeepSeek。
->
-> - **翻译**:方向自动判断——含中文 → 译成英文;其它语言 → 译成简体中文。
-> - **解释**:用简体中文把选中的概念/代码直接讲明白(代码会拆解逻辑、点出语法与设计意图;
->   概念用大白话讲清是什么/为什么/怎么用)。结果**流式逐字弹出**(打字机),
->   支持完整 **Markdown 渲染**(标题/列表/代码块/分隔线/引用/粗斜体/行内代码)。
-> - **截图解释**:按 **⌃⌥E**(或菜单「📷 截图解释」)框选屏幕一块区域 → AI 看图讲解(报错、图表、界面、文档都行),同样流式输出、可追问。
-> - **追问**:解释完浮窗底部有输入框,可**带上下文继续追问**(回车发送),像聊天一样一轮轮往下问。
+# 🌐 popdict
 
-本仓库提供三种实现,推荐第一种(原生 App,开箱即用、自动冒泡、无需快捷键):
+### 划词即译 · 截图即解 · 原生丝滑的 macOS 桌面 AI 助手
 
-| 实现 | 说明 | 需要装额外软件? |
-|------|------|------------------|
-| **原生 App**(主推) | `popdict-app/` 下的 Swift 菜单栏程序,划词自动冒泡 | 不需要 |
-| PopClip 扩展 | `DeepSeek-Translate.popclipext/`,装了 [PopClip](https://pilotmoon.com/popclip/) 的话最省事 | 需要 PopClip |
-| Hammerspoon 脚本 | `popdict.lua`,快捷键触发(`⌘⇧T`) | 需要 [Hammerspoon](https://www.hammerspoon.org/) |
+**在任何 App 里选中文字,旁边立刻冒出「翻译 / 解释」;框选屏幕一块,让 AI 看着图讲给你听。**
+
+免费 · 原生 · 隐私优先 —— 全程本地直连**你自己的**大模型,绝不经过任何第三方服务器。
+
+<br>
+
+![macOS](https://img.shields.io/badge/macOS-12%2B-000000?style=flat-square&logo=apple)
+![Swift](https://img.shields.io/badge/Swift-5-F05138?style=flat-square&logo=swift&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-3DA639?style=flat-square)
+![价格](https://img.shields.io/badge/价格-免费-success?style=flat-square)
+![依赖](https://img.shields.io/badge/第三方依赖-零-brightgreen?style=flat-square)
+![OpenAI 兼容](https://img.shields.io/badge/模型-任意%20OpenAI%20兼容-412991?style=flat-square&logo=openai&logoColor=white)
+
+</div>
+
+<br>
+
+> **一眼感受**:选中看不懂的代码/概念,点「💡 解释」——流式逐字弹出,完整 Markdown(标题 / 列表 / **表格** / 代码块 / 引用),还能带上下文继续追问。
+
+<div align="center">
+<img src="images/explain.png" width="560" alt="popdict 解释结果:完整 Markdown 渲染,含表格与代码块">
+</div>
+
+<br>
 
 ---
 
-## 一、原生 App(推荐)
+## ✨ 为什么用 popdict
 
-一个常驻菜单栏的小程序(图标 🌐),无 Dock 图标。划词即冒泡,点按钮出译文。
+- 🖱️ **选中即出结果** —— 不用复制、不用切窗口、不用打开网页。划完词,翻译/解释就贴在选区旁边。
+- 📸 **截图让 AI 看图讲解** —— 报错截图、图表、外文界面、设计稿、一段文档…… 框一下,AI 直接看着图说人话。这是别家划词工具基本没有的。
+- ⚡ **流式 + 富文本** —— 逐字打字机输出;完整 Markdown 渲染(标题 / 列表 / 代码块 / **表格** / 分隔线 / 引用 / 行内代码)。
+- 💬 **带上下文追问** —— 解释完底部就是输入框,回车接着问,像聊天一样一轮轮深入。
+- 🎛️ **模型自己挑** —— 内置 DeepSeek、小米 MiMo,也能加任意 **OpenAI 兼容** 厂商(自定义名字 / Base URL / Model / Key)。一个下拉随时切换。
+- 🪟 **原生丝滑** —— 毛玻璃浮窗、淡入淡出、可拖拽自由缩放并**记住大小**,纯 AppKit、无 Electron、无后台全家桶。
+- 🔒 **隐私优先** —— Key 只存你本机,内容只在你触发时**直连你选的厂商接口**,本程序不收集、不中转、不上传任何数据。
+- 💸 **完全免费、零第三方依赖** —— 一个几百 KB 的菜单栏小程序,开箱即用。
 
-### 安装
+<br>
 
-**方式 A:下载现成的 dmg**(见本仓库 [Releases](../../releases))
+## 🎬 看看长什么样
 
-1. 打开 dmg,把 `popdict.app` 拖进「应用程序」。
-2. 在「应用程序」里**右键点 popdict → 打开 → 再点「打开」**(只需这一次,绕过"未知开发者"提示)。
-3. 菜单栏出现 🌐 即启动成功。
+| 划词翻译 / 解释 | 截图解释 | 模型设置 |
+|:---:|:---:|:---:|
+| 选中文字 → 旁边冒「🌐 翻译 / 💡 解释」 | `⌃⌥E` 框选屏幕 → AI 看图讲解 | 下拉切厂商,填 Key 即用 |
 
-**方式 B:自己编译**(只需 macOS 自带的命令行工具,无需完整 Xcode)
+<div align="center">
+<img src="images/settings.png" width="460" alt="popdict 设置窗口:下拉选择模型厂商">
+</div>
 
-```sh
-cd popdict-app
-bash build.sh          # 生成 universal 的 popdict.app 和 popdict.dmg
+> 💡 想让 README 更带感?你可以把上面这张换成自己**实拍的 GIF**(划词 → 弹窗 → 流式出结果),冲击力拉满。
+
+<br>
+
+## 🚀 60 秒上手
+
+**1. 装上它**
+
+- **方式 A(推荐)**:到 [Releases](../../releases) 下载 `popdict.dmg` → 打开 → 把 `popdict.app` 拖进「应用程序」。
+  首次打开请**右键 → 打开 → 再点「打开」**(只需这一次,绕过"未知开发者"提示)。菜单栏出现 🌐 即成功。
+- **方式 B(自己编译)**:只需 macOS 自带命令行工具,无需完整 Xcode。
+  ```sh
+  cd popdict-app && bash build.sh   # 产出 universal 的 popdict.app 和 popdict.dmg
+  ```
+
+**2. 填一个模型 Key**
+
+点菜单栏 🌐 → **「设置…」**,下拉选一个厂商(预置 DeepSeek / MiMo),填上它的 **API Key**,点保存。改完立刻生效、无需重启。
+
+> 去哪申请:[小米 MiMo](https://platform.xiaomimimo.com/)(支持看图)· [DeepSeek](https://platform.deepseek.com/)。也可「+ 添加厂商」接任意 OpenAI 兼容服务。
+
+**3. 授权辅助功能**
+
+划词监听需要「辅助功能」权限:菜单栏 🌐 →「辅助功能权限设置…」,在 **系统设置 → 隐私与安全性 → 辅助功能** 里打开 popdict 的开关(打开后无需重启,自动开始监听)。
+
+**搞定!** 在任意 App 选中文字试试,或按 `⌃⌥E` 框选屏幕。
+
+<br>
+
+## 🧩 怎么用
+
+| 操作 | 怎么做 |
+|------|--------|
+| **翻译** | 选中文字 → 点「🌐 翻译」。含中文 → 英文;其它语言 → 简体中文。 |
+| **解释** | 选中代码/概念 → 点「💡 解释」。流式 + Markdown,讲清"是什么 / 为什么 / 怎么用"。 |
+| **追问** | 解释浮窗底部输入框,回车发送,带上下文继续问。 |
+| **截图解释** | 按 `⌃⌥E`(或菜单「📷 截图解释」)→ 框选屏幕一块 → AI 看图讲解,可追问。`Esc` 取消。 |
+| **缩放记忆** | 结果浮窗拖右下角握把(或拖边缘)改大小,**自动记住**,下次照这尺寸开。 |
+| **复制 / 关闭** | 浮窗里可选中复制,点别处即关闭。 |
+
+> 截图解释需要「屏幕录制」权限(只有这个功能用得到):首次按 `⌃⌥E` 会提示,去 **系统设置 → 隐私与安全性 → 屏幕录制** 打开 popdict(**首次授予后通常要重开 App 才生效**)。看图还要求当前厂商勾了「支持看图」(MiMo 预置已勾)。
+
+<br>
+
+## ⚙️ 模型厂商管理
+
+popdict 不锁定任何一家——只要是 **OpenAI 兼容**(`/chat/completions`)的服务都能接。
+
+- 设置窗口里用下拉选厂商,每个厂商可配 **名字 / Base URL / Model / API Key / 是否支持看图**。
+- 选一个为「**● 当前使用**」,翻译/解释/看图都走它;随时切换、随时加新厂商。
+- 配置存在本机 `~/.config/popdict/config.json`;老版本的 `mimo_key` 文件会在首启**自动迁移**进来,不丢配置。
+
+| 预置厂商 | Base URL | 默认模型 | 看图 |
+|------|------|------|:--:|
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | ✗ |
+| 小米 MiMo | `https://api.xiaomimimo.com/v1` | `mimo-v2.5` | ✓ |
+
+<br>
+
+## 🔒 隐私
+
+- **Key 只存你本机** `~/.config/popdict/config.json`,不会上传到任何地方。
+- 选中的文字、截到的图,**只在你主动触发时**直接发给**你选的那家厂商**官方接口用于本次翻译/解释/看图。
+- 本程序自身**不收集、不中转、不上传**任何数据,也没有任何遥测/账号体系。
+
+<br>
+
+## 🛠 工作原理
+
+- **取词**:优先用 macOS 辅助功能(Accessibility)直接读选区文字;读不到时模拟一次 `⌘C`(用完自动还原你的剪贴板)。
+- **冒泡**:全局鼠标事件监听(CGEventTap)感知"划选",在选区旁弹一个无边框毛玻璃浮窗。
+- **翻译 / 解释**:调当前厂商的 `chat/completions`;解释开 `stream:true`,用 `URLSession.bytes` 逐行读 SSE、逐字渲染,结束后整体按 Markdown 重渲染(含 `NSTextTable` 表格)。
+- **截图解释**:自带全屏遮罩框选,用 `CGWindowListCreateImage` 截「遮罩下方」真实画面,PNG/base64 后作为 `image_url` 随消息发给支持看图的厂商(多模态),复用同一套会话浮窗。
+
+<br>
+
+## ❓ 常见问题
+
+<details>
+<summary><b>划词不冒泡 / 没反应?</b></summary>
+
+点菜单栏 🌐 看「辅助功能」是否打勾。没勾就去 系统设置 → 隐私与安全性 → 辅助功能 打开 popdict。日志在 `~/.config/popdict/popdict.log`。
+</details>
+
+<details>
+<summary><b>截图解释没反应?</b></summary>
+
+多半是「屏幕录制」权限没开、或刚开还没重启 App;也可能当前厂商没勾「支持看图」(切到 MiMo)。
+</details>
+
+<details>
+<summary><b>更新后辅助功能授权丢了?</b></summary>
+
+先在「钥匙串访问」建一个自签名代码签名证书,然后 `bash build.sh "你的证书名"` 用它签名——同一证书签名,TCC 授权不会因重编而失效。
+</details>
+
+<details>
+<summary><b>能接 OpenAI / 通义 / Kimi / 本地 Ollama 吗?</b></summary>
+
+能。只要对方提供 OpenAI 兼容的 `/chat/completions`,在设置里「+ 添加厂商」填上 Base URL、Model、Key 即可;看图功能取决于该模型是否支持多模态(勾上「支持看图」)。
+</details>
+
+<br>
+
+## 🧰 另外两种轻量实现(可选)
+
+不想装 App?仓库里还附了两种迷你方案:
+
+| 实现 | 说明 | 需要 |
+|------|------|------|
+| **PopClip 扩展** | 双击 `DeepSeek-Translate.popclipext` 安装,在 PopClip 里填 Key,选中点 🌐 | [PopClip](https://pilotmoon.com/popclip/) |
+| **Hammerspoon 脚本** | `popdict.lua` 用 `dofile` 加载,选中按 `⌘⇧T` 弹译文 | [Hammerspoon](https://www.hammerspoon.org/) |
+
+> 这两种走 DeepSeek,配置在 `~/.config/popdict/deepseek_key`,详见各自文件注释。原生 App 才是主推。
+
+<br>
+
+## 📦 项目结构
+
+```
+popdict-app/         原生 App(Swift):main.swift / Markdown.swift / Screenshot.swift / Config.swift / Settings.swift
+  └─ build.sh        一行命令打包 universal app + dmg
+DeepSeek-Translate.popclipext/   PopClip 扩展
+popdict.lua          Hammerspoon 脚本
+images/              README 配图
 ```
 
-> 想让"更新后不丢辅助功能授权",可先在「钥匙串访问」里建一个自签名的代码签名证书,
-> 然后 `bash build.sh "你的证书名"` 用它签名(同一证书签名,TCC 授权不会因重编而失效)。
+<br>
 
-### 配置厂商和 API Key(图形界面)
+## 📄 License
 
-点菜单栏 🌐 →「**设置…**」打开设置窗口管理厂商:
-
-- 预置了 **DeepSeek** 和 **MiMo** 两条(都是 OpenAI 兼容接口),也能「+ 添加厂商」接其它 OpenAI 兼容服务(自定义名字 / Base URL / Model)。
-- 在想用的那条里填 **API Key**,勾上它的「**● 当前使用**」,点「保存」即可。改了立刻生效,无需重启。
-- **截图解释要看图,只有勾了「支持看图」的厂商能用**(预置里 MiMo 已勾、DeepSeek 没勾);当前厂商不支持看图时,「📷 截图解释」会灰掉。
-
-> 去哪申请 Key:[MiMo](https://platform.xiaomimimo.com/)、[DeepSeek](https://platform.deepseek.com/)。
-> 配置只存在本机 `~/.config/popdict/config.json`,**不会上传任何地方**(只在翻译/解释/看图时直接发给你选的厂商接口)。
-> 老版本的 `mimo_key` 文件会在首次启动时**自动迁移**进 MiMo 那条,不用手动搬。
-
-### 授权(辅助功能 + 屏幕录制)
-
-- **辅助功能**(划词监听必需):点菜单栏 🌐 →「辅助功能权限设置…」,或手动打开
-  **系统设置 → 隐私与安全性 → 辅助功能**,把 popdict 的开关打开。打开后**无需重启**,
-  程序会自动开始监听(内部每秒检测一次授权状态)。
-- **屏幕录制**(只有「截图解释」需要):第一次按 ⌃⌥E 时会提示,去
-  **系统设置 → 隐私与安全性 → 屏幕录制**打开 popdict。**首次授予后通常要重开 popdict 才生效。**
-  不用截图解释的话,可以不开这个权限。
-
-### 使用
-
-- **划词翻译 / 解释**:在任意 App 里选中一段文字 → 旁边冒出「🌐 翻译」「💡 解释」→ 点哪个走哪个 →
-  原地显示结果(可选中复制,点别处关闭)。解释为流式输出,逐字弹出,
-  并在底部输入框里**带上下文继续追问**(回车发送)。
-- **浮窗可缩放、记住大小**:出结果的浮窗(翻译 / 解释 / 截图解释)可**拖右下角小握把**(或拖窗口边缘)
-  自由改大小;调好后会**记住**,下次照这个尺寸打开,内容多了在框内滚动。
-- **截图解释**:按 **⌃⌥E**(或点菜单栏 🌐 →「📷 截图解释」)→ 像系统截图那样**框选**屏幕一块区域 →
-  浮窗顶部显示这张图的缩略图,下面流式给出讲解,同样可继续追问。框选时按 **Esc** 取消。
-
-### 排查
-
-- 点菜单栏 🌐,看「辅助功能」「API Key」「屏幕录制」几项是否都已打勾。
-- 截图解释没反应:多半是「屏幕录制」没开,或刚开还没重启 App。
-- 日志在 `~/.config/popdict/popdict.log`,记录了启动、授权、取词、热键的每一步。
-
----
-
-## 二、PopClip 扩展
-
-装了 PopClip 的话,直接双击 `DeepSeek-Translate.popclipext`(或打包后的 `.popclipextz`)安装,
-在 PopClip 设置里填入 DeepSeek API Key 即可。选中文字后点 PopClip 工具条上的 🌐。
-
-## 三、Hammerspoon 脚本
-
-把 `popdict.lua` 用 `~/.hammerspoon/init.lua` 里一行 `dofile` 加载,
-配好 `~/.config/popdict/deepseek_key`,选中文字按 `⌘⇧T` 弹出译文。详见脚本顶部注释。
-
----
-
-## 工作原理
-
-- **取词**:优先用 macOS 辅助功能(Accessibility)接口直接读选区文字;读不到时模拟一次
-  `⌘C` 复制(用完自动还原你原来的剪贴板)。
-- **冒泡**:用全局鼠标事件监听(CGEventTap)感知"划选"动作,在选区旁弹一个无边框毛玻璃浮窗。
-- **翻译**:调用小米 MiMo 的 `chat/completions` 接口(OpenAI 兼容),按是否含中文决定译入语言。
-- **解释**:同一接口开 `stream: true`,用 `URLSession.bytes` 逐行读 SSE、逐字渲染,
-  浮窗按真实内容高度节流平滑长高,结束后整体按 markdown 重渲染并可复制。
-- **截图解释**:自带全屏遮罩框选,用 `CGWindowListCreateImage` 截「遮罩下方」的真实画面,
-  PNG/base64 编码后作为 `image_url` 随消息发给 MiMo(`mimo-v2.5` 多模态),复用解释/追问的会话浮窗。
-
-## 隐私
-
-- API Key 仅存于本地 `~/.config/popdict/mimo_key`(原生 App)。
-- 选中的文字、截图只在你触发翻译/解释/看图时发送给 MiMo 官方接口,本程序不收集、不上传任何其它数据。
-
-## License
-
-[MIT](./LICENSE)
+[MIT](./LICENSE) —— 随便用、随便改、随便分发。如果它帮到你,点个 ⭐ 就是最大的鼓励。
