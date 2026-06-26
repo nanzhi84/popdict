@@ -265,7 +265,7 @@ let kExplainSystem = """
 // 通用流式对话:messages 为完整消息数组(含 system);逐字回吐(打字机)。
 // 返回可取消的 Task;无 key 等同步错误时回调 onError 并返回 nil。
 @discardableResult
-func chatStream(_ messages: [[String: String]],
+func chatStream(_ messages: [[String: Any]],
                 onDelta: @escaping (String) -> Void,
                 onDone: @escaping (String) -> Void,
                 onError: @escaping (String) -> Void) -> Task<Void, Never>? {
@@ -413,6 +413,7 @@ final class PopupController {
 
     // 会话(解释 + 追问)状态
     private var convo: [(role: String, content: String)] = []   // 不含 system;首条 user 为原文
+    private var attachedImageDataURL: String?                    // 截图解释:本轮会话附带的图(base64 data URL),整段会话期间保留、每轮重发
     private var convoTextView: NSTextView?                       // 整段对话的 transcript
     private var convoScroll: NSScrollView?
     private var askField: NSTextField?                           // 底部追问输入框
@@ -689,8 +690,19 @@ final class PopupController {
         assistantStart = convoTextView?.textStorage?.length ?? 0
         assistantAccum = ""
         setInputEnabled(false, placeholder: "正在生成…")
-        var messages: [[String: String]] = [["role": "system", "content": kExplainSystem]]
-        for m in convo { messages.append(["role": m.role, "content": m.content]) }
+        var messages: [[String: Any]] = [["role": "system", "content": kExplainSystem]]
+        for (i, m) in convo.enumerated() {
+            if i == 0, m.role == "user", let dataURL = attachedImageDataURL {
+                // 截图解释:首条 user = 指令文字 + 图片块(每轮重发,确保追问仍带图上下文)
+                let content: [[String: Any]] = [
+                    ["type": "text", "text": m.content],
+                    ["type": "image_url", "image_url": ["url": dataURL]]
+                ]
+                messages.append(["role": "user", "content": content])
+            } else {
+                messages.append(["role": m.role, "content": m.content])
+            }
+        }
         convoTask = chatStream(messages,
             onDelta: { [weak self] piece in self?.convoAppendDelta(piece) },
             onDone:  { [weak self] full  in self?.finishTurn(full) },
@@ -893,6 +905,7 @@ final class PopupController {
         convoScroll = nil
         askField = nil
         convo = []
+        attachedImageDataURL = nil
         assistantStart = 0
         assistantAccum = ""
     }
