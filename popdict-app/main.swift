@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import os.log
 
 // ============================================================
@@ -1215,11 +1216,45 @@ func setupEventTap() -> Bool {
     return enabled
 }
 
+// MARK: - 全局热键(Carbon)
+
+// 注册一个系统级热键(默认 ⌃⌥E),按下时在主线程触发回调(截图解释)。
+// 用 Carbon RegisterEventHotKey:系统级、稳定、能消费按键、无需额外权限。
+final class HotKey {
+    private var ref: EventHotKeyRef?
+    private static var handlerInstalled = false
+    private static var actions: [UInt32: () -> Void] = [:]   // C 回调不能捕获上下文,按 id 查表
+
+    @discardableResult
+    init?(keyCode: UInt32, modifiers: UInt32, id: UInt32, action: @escaping () -> Void) {
+        HotKey.actions[id] = action
+        if !HotKey.handlerInstalled {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                     eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
+                var hkID = EventHotKeyID()
+                GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                                  EventParamType(typeEventHotKeyID), nil,
+                                  MemoryLayout<EventHotKeyID>.size, nil, &hkID)
+                HotKey.actions[hkID.id]?()
+                return noErr
+            }, 1, &spec, nil, nil)
+            HotKey.handlerInstalled = true
+        }
+        let hkID = EventHotKeyID(signature: OSType(0x504f5044), id: id)   // 'POPD'
+        let status = RegisterEventHotKey(keyCode, modifiers, hkID, GetApplicationEventTarget(), 0, &ref)
+        if status != noErr { logLine("HOTKEY register failed status=\(status)"); return nil }
+        logLine("HOTKEY registered id=\(id) keyCode=\(keyCode)")
+    }
+}
+
 // MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let popup = PopupController()
     var statusItem: NSStatusItem?
+    var hotKey: HotKey?
+    var activeCapture: RegionCapture?      // 截图期间强持有 RegionCapture,避免遮罩提前释放
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureConfigDir()
@@ -1234,6 +1269,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         setupStatusItem()
+
+        // 全局热键 ⌃⌥E 触发截图解释(与划词监听互不依赖)
+        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_E),
+                        modifiers: UInt32(controlKey | optionKey),
+                        id: 1) { [weak self] in
+            DispatchQueue.main.async { self?.onScreenshotExplain() }
+        }
 
         if AXIsProcessTrusted() {
             setupEventTap()
@@ -1261,15 +1303,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "popdict 划词翻译", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         let axOK = AXIsProcessTrusted()
         menu.addItem(NSMenuItem(title: axOK ? "✓ 辅助功能:已授权" : "⚠️ 辅助功能:未授权(点下面去开)",
                                 action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: readAPIKey() == nil ? "⚠️ 未填 API Key" : "✓ 已配置 API Key",
                                 action: nil, keyEquivalent: ""))
+        let scrOK = RegionCapture.hasScreenRecordingPermission()
+        menu.addItem(NSMenuItem(title: scrOK ? "✓ 屏幕录制:已授权" : "⚠️ 屏幕录制:未授权(截图解释需要)",
+                                action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "📷 截图解释  ⌃⌥E", action: #selector(onScreenshotExplain), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "辅助功能权限设置…", action: #selector(openAXSettings), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "屏幕录制权限设置…", action: #selector(openScreenRecordingSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "重新检查权限", action: #selector(recheck), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
@@ -1312,6 +1360,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openAXSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    // 截图解释:无屏幕录制权限先引导,否则弹框选遮罩,截完交给图片会话浮窗
+    @objc func onScreenshotExplain() {
+        if !RegionCapture.hasScreenRecordingPermission() {
+            RegionCapture.requestScreenRecordingPermission()
+            let a = NSAlert()
+            a.messageText = "需要「屏幕录制」权限"
+            a.informativeText = "截图解释要用到屏幕录制权限。请在 系统设置 → 隐私与安全性 → 屏幕录制 里打开 popdict。\n\n注意:首次授予后通常需要重新打开 popdict 才会生效。"
+            a.addButton(withTitle: "打开设置")
+            a.addButton(withTitle: "取消")
+            NSApp.activate(ignoringOtherApps: true)
+            if a.runModal() == .alertFirstButtonReturn { openScreenRecordingSettings() }
+            refreshMenu()
+            return
+        }
+        let rc = RegionCapture()
+        activeCapture = rc
+        rc.capture { [weak self] image in
+            self?.activeCapture = nil
+            guard let self = self, let image = image else { return }
+            self.popup.beginImageConversation(image: image)
+        }
+    }
+
+    @objc func openScreenRecordingSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
         }
     }
