@@ -79,6 +79,15 @@ func hasChinese(_ s: String) -> Bool {
     return false
 }
 
+// AppKit(左下原点)↔ Quartz(左上原点)翻转的基准高度:主屏的高度。
+// 主屏 = AppKit 原点 (0,0) 所在那块(也是 Quartz 原点所在屏)。
+// 注意:不能用「所有屏幕并集」高度,也不能用 NSScreen.main(那是焦点屏);多屏不等高时
+// 用并集高度会让两块屏的截图都整体偏移。CGWindowListCreateImage 的坐标系正是以主屏左上为原点。
+func primaryScreenHeight() -> CGFloat {
+    return (NSScreen.screens.first(where: { $0.frame.origin == .zero })
+            ?? NSScreen.screens.first)?.frame.height ?? 0
+}
+
 // MARK: - 取选中文字(AX 优先,失败再模拟 Cmd+C)
 
 func selectedTextViaAX() -> String? {
@@ -744,6 +753,7 @@ final class PopupController {
         assistantStart = convoTextView?.textStorage?.length ?? 0
         assistantAccum = ""
         setInputEnabled(false, placeholder: "正在生成…")
+        let gen = generation   // 令牌:关窗/换会话(generation+1)后,旧流式回调一律作废,防止污染新会话
         var messages: [[String: Any]] = [["role": "system", "content": kExplainSystem]]
         for (i, m) in convo.enumerated() {
             if i == 0, m.role == "user", let dataURL = attachedImageDataURL {
@@ -758,9 +768,9 @@ final class PopupController {
             }
         }
         convoTask = chatStream(messages,
-            onDelta: { [weak self] piece in self?.convoAppendDelta(piece) },
-            onDone:  { [weak self] full  in self?.finishTurn(full) },
-            onError: { [weak self] msg   in self?.convoError(msg) })
+            onDelta: { [weak self] piece in guard let self = self, gen == self.generation else { return }; self.convoAppendDelta(piece) },
+            onDone:  { [weak self] full  in guard let self = self, gen == self.generation else { return }; self.finishTurn(full) },
+            onError: { [weak self] msg   in guard let self = self, gen == self.generation else { return }; self.convoError(msg) })
     }
 
     // 逐字追加(流式途中纯文本,避免半截 markdown 错乱);长高交给定时器节流
@@ -1086,7 +1096,7 @@ final class PopupController {
             return NSRect(x: x, y: y, width: w, height: h)
         }
         // sel:Quartz 屏幕坐标(左上原点)→ AppKit(左下原点,以主屏高度翻转)
-        let primaryH = NSScreen.screens.first?.frame.height ?? 0
+        let primaryH = primaryScreenHeight()
         let selAK = CGRect(x: sel.minX, y: primaryH - sel.maxY, width: sel.width, height: sel.height)
         let selTop = selAK.maxY          // 选区上沿(AppKit)
         let gap: CGFloat = 12
@@ -1367,14 +1377,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 截图解释:无屏幕录制权限先引导,否则弹框选遮罩,截完交给图片会话浮窗
     @objc func onScreenshotExplain() {
         if !RegionCapture.hasScreenRecordingPermission() {
-            RegionCapture.requestScreenRecordingPermission()
+            let granted = RegionCapture.requestScreenRecordingPermission()
             let a = NSAlert()
-            a.messageText = "需要「屏幕录制」权限"
-            a.informativeText = "截图解释要用到屏幕录制权限。请在 系统设置 → 隐私与安全性 → 屏幕录制 里打开 popdict。\n\n注意:首次授予后通常需要重新打开 popdict 才会生效。"
-            a.addButton(withTitle: "打开设置")
-            a.addButton(withTitle: "取消")
             NSApp.activate(ignoringOtherApps: true)
-            if a.runModal() == .alertFirstButtonReturn { openScreenRecordingSettings() }
+            if granted {
+                // 用户刚在系统弹窗里授权:本进程通常要重开 App 才真正生效
+                a.messageText = "屏幕录制权限已授予"
+                a.informativeText = "权限已开启。首次授予后通常需要重新打开 popdict 才会真正生效,然后再用 ⌃⌥E 截图解释。"
+                a.addButton(withTitle: "好的")
+                a.runModal()
+            } else {
+                // 之前已被拒绝(系统不再弹窗)或刚拒绝:引导去设置手动打开
+                a.messageText = "需要「屏幕录制」权限"
+                a.informativeText = "截图解释要用到屏幕录制权限。请在 系统设置 → 隐私与安全性 → 屏幕录制 里打开 popdict。\n\n注意:首次授予后通常需要重新打开 popdict 才会生效。"
+                a.addButton(withTitle: "打开设置")
+                a.addButton(withTitle: "取消")
+                if a.runModal() == .alertFirstButtonReturn { openScreenRecordingSettings() }
+            }
             refreshMenu()
             return
         }

@@ -71,8 +71,10 @@ private final class SelectionView: NSView {
         NSColor.controlAccentColor.setStroke()
         let path = NSBezierPath(rect: sel); path.lineWidth = 1.5; path.stroke()
 
-        // 尺寸标签(像素;乘以 backingScale 更贴近真实截图分辨率)
-        let scale = window?.backingScaleFactor ?? 2
+        // 尺寸标签(像素;按选区所在屏幕的缩放估算,默认 1 适配非 Retina / 外接普通屏)
+        let center = NSPoint(x: (window?.frame.minX ?? 0) + sel.midX,
+                             y: (window?.frame.minY ?? 0) + sel.midY)
+        let scale = NSScreen.screens.first(where: { $0.frame.contains(center) })?.backingScaleFactor ?? 1
         let label = "\(Int(sel.width * scale)) × \(Int(sel.height * scale))"
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
@@ -120,7 +122,8 @@ final class RegionCapture {
             let globalAK = NSRect(x: union.minX + localRect.minX,
                                   y: union.minY + localRect.minY,
                                   width: localRect.width, height: localRect.height)
-            let primaryH = NSScreen.screens.first?.frame.height ?? 0
+            // 翻转基准用主屏高度(见 primaryScreenHeight 注释):多屏不等高时用并集高度会整体偏移
+            let primaryH = primaryScreenHeight()
             let quartz = CGRect(x: globalAK.minX, y: primaryH - globalAK.maxY,
                                 width: globalAK.width, height: globalAK.height)
             // 截遮罩窗口「下方」的真实画面(压暗层不会进图);此刻窗口仍在屏上
