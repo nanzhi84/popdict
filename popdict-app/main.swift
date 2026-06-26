@@ -1268,6 +1268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureConfigDir()
+        AppConfig.shared.load()
         logLine("=== launch AX_TRUSTED=\(AXIsProcessTrusted()) configDir=\(FileManager.default.fileExists(atPath: kConfigDir)) ===")
         gAppDelegate = self
         setupMainMenu()
