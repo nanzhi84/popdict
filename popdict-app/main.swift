@@ -578,19 +578,12 @@ final class PopupController {
         }
     }
 
-    // 建会话浮窗:transcript 滚动区 + 底部追问输入栏(解释时禁用),发起第一轮解释
-    private func beginConversation(firstUserText: String, at fixedOrigin: NSPoint? = nil) {
-        stopConversation()
-        convo = [(role: "user", content: firstUserText)]
+    // 搭建会话浮窗骨架(transcript 滚动区 + 底部追问输入栏),present 并启动长高定时器。
+    // 由 beginConversation(文字解释)与 beginImageConversation(截图解释)共用。
+    private func installConversationPanel(at origin: NSPoint) {
         let textW = convoW - convoPad * 2
         let visibleH: CGFloat = 22
         let panelH = convoPad + visibleH + transcriptBottomGap + inputBarH
-        // 顶边对齐:从按钮切到会话时保持「顶边」不动(会话向下生长,顶边贴着选区上沿)
-        let origin: NSPoint
-        if let fo = fixedOrigin { origin = fo }
-        else if let pf = panel?.frame { origin = NSPoint(x: pf.minX, y: pf.maxY - panelH) }
-        else { origin = NSEvent.mouseLocation }
-
         let container = NSView(frame: NSRect(x: 0, y: 0, width: convoW, height: panelH))
         container.autoresizingMask = [.width, .height]   // present 用 animateFrame:false 直接定尺寸,不会被动画放大
 
@@ -618,7 +611,67 @@ final class PopupController {
         rect = clampToScreen(rect)
         present(content: container, rect: rect, animateFrame: false)   // 会话切换:直接定尺寸,不做帧动画
         startConvoTimer()             // 立即启动生长(不依赖 completionHandler,后者在本类浮窗下不可靠)
+    }
+
+    // 建会话浮窗:transcript 滚动区 + 底部追问输入栏(解释时禁用),发起第一轮解释
+    private func beginConversation(firstUserText: String, at fixedOrigin: NSPoint? = nil) {
+        stopConversation()
+        attachedImageDataURL = nil
+        convo = [(role: "user", content: firstUserText)]
+        let panelH = convoPad + 22 + transcriptBottomGap + inputBarH
+        // 顶边对齐:从按钮切到会话时保持「顶边」不动(会话向下生长,顶边贴着选区上沿)
+        let origin: NSPoint
+        if let fo = fixedOrigin { origin = fo }
+        else if let pf = panel?.frame { origin = NSPoint(x: pf.minX, y: pf.maxY - panelH) }
+        else { origin = NSEvent.mouseLocation }
+        installConversationPanel(at: origin)
         sendTurn()
+    }
+
+    // 截图解释:把图存为会话首条 user(每轮重发),顶部放缩略图 + 指令气泡,然后流式解释。
+    // 与文字解释共用同一套会话浮窗 + 追问 + 回滚逻辑。
+    func beginImageConversation(image: NSImage, instruction: String = "请解释这张图片的内容。", at fixedOrigin: NSPoint? = nil) {
+        generation += 1
+        stopConversation()
+        guard let dataURL = RegionCapture.encodeToDataURL(image) else {
+            showMessage("图片编码失败,请重试", isError: true)
+            return
+        }
+        attachedImageDataURL = dataURL
+        convo = [(role: "user", content: instruction)]
+        let panelH = convoPad + 22 + transcriptBottomGap + inputBarH
+        let origin: NSPoint
+        if let fo = fixedOrigin { origin = fo }
+        else {
+            let vf = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+            origin = NSPoint(x: vf.midX - convoW / 2, y: vf.maxY - 80 - panelH)
+        }
+        installConversationPanel(at: origin)
+        // 顶部:缩略图 + 指令气泡(在 sendTurn 之前插入,流式答案接其后)
+        if let tv = convoTextView, let storage = tv.textStorage {
+            storage.append(thumbnailString(image, maxW: convoW - convoPad * 2))
+            storage.append(NSAttributedString(string: instruction + "\n", attributes: [
+                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: MD.bodyStyle()]))
+        }
+        sendTurn()
+        growConversation(force: true)
+    }
+
+    // 把图缩放后做成行内附件(贴合浮窗内宽,高度上限 240),返回带尾随换行的富文本
+    private func thumbnailString(_ image: NSImage, maxW: CGFloat) -> NSAttributedString {
+        let iw = max(1, image.size.width), ih = max(1, image.size.height)
+        var dw = min(maxW, iw)
+        var dh = dw * ih / iw
+        let maxH: CGFloat = 240
+        if dh > maxH { dh = maxH; dw = dh * iw / ih }
+        let att = NSTextAttachment()
+        att.image = image
+        att.bounds = CGRect(x: 0, y: 0, width: dw, height: dh)
+        let m = NSMutableAttributedString(attributedString: NSAttributedString(attachment: att))
+        m.append(NSAttributedString(string: "\n", attributes: [.font: convoFont, .paragraphStyle: MD.bodyStyle()]))
+        return m
     }
 
     // 用自定义 CodeBlockLayoutManager 建可选中、可竖向自适应的 NSTextView(代码块满宽圆角底由它绘制)
