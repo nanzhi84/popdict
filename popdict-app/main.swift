@@ -550,6 +550,7 @@ final class PopupController: NSObject, NSWindowDelegate {
 
     @objc private func onTranslateClicked() {
         guard let text = pendingText else { return }
+        generation += 1   // 作废上一次在途回调(与解释/截图一致)
         let gen = generation
         showMessage("翻译中…", isError: false)
         translate(text) { [weak self] result, errMsg in
@@ -654,6 +655,7 @@ final class PopupController: NSObject, NSWindowDelegate {
 
     // 建会话浮窗:transcript 滚动区 + 底部追问输入栏(解释时禁用),发起第一轮解释
     private func beginConversation(firstUserText: String, at fixedOrigin: NSPoint? = nil) {
+        generation += 1   // 作废在途的翻译回调(防止快速「翻译→解释」时旧译文污染会话)
         stopConversation()
         attachedImageDataURL = nil
         convo = [(role: "user", content: firstUserText)]
@@ -1347,7 +1349,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(NSMenuItem(title: scrOK ? "✓ 屏幕录制:已授权" : "⚠️ 屏幕录制:未授权(截图解释需要)",
                                 action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "📷 截图解释  ⌃⌥E", action: #selector(onScreenshotExplain), keyEquivalent: ""))
+        let shot = NSMenuItem(title: "📷 截图解释  ⌃⌥E", action: #selector(onScreenshotExplain), keyEquivalent: "")
+        shot.target = self   // 显式 target,确保 validateMenuItem 被调用(不支持看图时灰掉)
+        menu.addItem(shot)
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "辅助功能权限设置…", action: #selector(openAXSettings), keyEquivalent: ""))

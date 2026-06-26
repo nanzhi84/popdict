@@ -54,16 +54,22 @@ final class AppConfig {
         logLine("config initialized (providers=\(providers.count) active=\(activeName))")
     }
 
-    func save() {
+    @discardableResult
+    func save() -> Bool {
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? enc.encode(Stored(active: activeName, providers: providers)) else { return }
-        do { try data.write(to: URL(fileURLWithPath: path), options: .atomic) }
-        catch { logLine("config save failed: \(error.localizedDescription)") }
+        guard let data = try? enc.encode(Stored(active: activeName, providers: providers)) else { return false }
+        do { try data.write(to: URL(fileURLWithPath: path), options: .atomic); return true }
+        catch { logLine("config save failed: \(error.localizedDescription)"); return false }
     }
 
-    func setProviders(_ ps: [Provider], active: String) {
+    // 落盘失败时回滚内存,保证内存与文件一致(避免「界面显示已保存、实际丢了」)
+    @discardableResult
+    func setProviders(_ ps: [Provider], active: String) -> Bool {
+        let oldP = providers, oldA = activeName
         providers = ps
         activeName = active
-        save()
+        if save() { return true }
+        providers = oldP; activeName = oldA
+        return false
     }
 }

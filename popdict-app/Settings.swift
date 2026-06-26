@@ -191,7 +191,10 @@ final class SettingsController: NSObject {
         if ps.contains(where: { $0.name.isEmpty }) { alert("每个厂商都要有名字"); return }
         if Set(ps.map { $0.name }).count != ps.count { alert("厂商名字不能重复"); return }
         let activeName = cards.first(where: { $0.isActive })?.toProvider().name ?? ps.first!.name
-        AppConfig.shared.setProviders(ps, active: activeName)
+        if !AppConfig.shared.setProviders(ps, active: activeName) {
+            alert("保存失败:无法写入配置文件。请检查磁盘空间或目录权限(~/.config/popdict)。")
+            return
+        }
         gAppDelegate?.refreshMenu()
         window?.close()
     }
