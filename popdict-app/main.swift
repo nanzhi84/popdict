@@ -408,7 +408,34 @@ final class HoverButton: NSButton {
     }
 }
 
-final class PopupController {
+// 右下角拖拽握把:拖动改窗口尺寸(左上角不动),松手回调保存
+final class ResizeGripView: NSView {
+    var onCommit: (() -> Void)?
+    private var startMouse: NSPoint = .zero
+    private var startFrame: NSRect = .zero
+    let minW: CGFloat = 300, minH: CGFloat = 180
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+    override func mouseDown(with e: NSEvent) { startMouse = NSEvent.mouseLocation; startFrame = window?.frame ?? .zero }
+    override func mouseDragged(with e: NSEvent) {
+        guard let win = window else { return }
+        let now = NSEvent.mouseLocation
+        let newW = max(minW, startFrame.width + (now.x - startMouse.x))
+        let newH = max(minH, startFrame.height - (now.y - startMouse.y))   // 向下拖 → 高度增加
+        win.setFrame(NSRect(x: startFrame.minX, y: startFrame.maxY - newH, width: newW, height: newH), display: true)
+    }
+    override func mouseUp(with e: NSEvent) { onCommit?() }
+    override func draw(_ r: NSRect) {
+        NSColor.secondaryLabelColor.withAlphaComponent(0.65).setStroke()
+        let p = NSBezierPath(); p.lineWidth = 1.2
+        for off in stride(from: 4, through: 12, by: 4) {
+            p.move(to: NSPoint(x: bounds.maxX - CGFloat(off) - 2, y: bounds.minY + 3))
+            p.line(to: NSPoint(x: bounds.maxX - 3, y: bounds.minY + CGFloat(off) + 1))
+        }
+        p.stroke()
+    }
+}
+
+final class PopupController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
     private var body: NSView?
     private var pendingText: String?
@@ -425,7 +452,6 @@ final class PopupController {
     private var convoScroll: NSScrollView?
     private var askField: NSTextField?                           // 底部追问输入框
     private var convoTask: Task<Void, Never>?
-    private var convoTimer: Timer?
     private var assistantStart = 0                               // 当前 assistant 流式段在 transcript 的起点
     private var assistantAccum = ""
     private var turnStartLoc = 0                                 // 本轮(含追问气泡)在 transcript 的起点,失败可整轮回滚
@@ -436,6 +462,10 @@ final class PopupController {
     private let convoPad: CGFloat = 18
     private let inputBarH: CGFloat = 46
     private let transcriptBottomGap: CGFloat = 14   // transcript 与底部输入栏分割线之间的留白
+    private var panelIsResizable = false            // 当前态是否「可缩放/记忆」的内容浮窗(结果/会话)
+    private let kPopupSizeKey = "popupSize"
+    private let minPopupSize = NSSize(width: 300, height: 180)
+    private let defaultPopupSize = NSSize(width: 460, height: 380)
 
     var isVisible: Bool { panel != nil }
     func frame() -> NSRect? { panel?.frame }
@@ -457,6 +487,7 @@ final class PopupController {
     func showButton(text: String, selectionBounds: CGRect? = nil, fallbackPoint: NSPoint) {
         generation += 1
         stopConversation()
+        panelIsResizable = false
         pendingText = text
         let h: CGFloat = 32, bw: CGFloat = 74, sep: CGFloat = 1
         let w: CGFloat = bw * 2 + sep
@@ -588,14 +619,15 @@ final class PopupController {
     // 搭建会话浮窗骨架(transcript 滚动区 + 底部追问输入栏),present 并启动长高定时器。
     // 由 beginConversation(文字解释)与 beginImageConversation(截图解释)共用。
     private func installConversationPanel(at origin: NSPoint) {
-        let textW = convoW - convoPad * 2
-        let visibleH: CGFloat = 22
-        let panelH = convoPad + visibleH + transcriptBottomGap + inputBarH
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: convoW, height: panelH))
-        container.autoresizingMask = [.width, .height]   // present 用 animateFrame:false 直接定尺寸,不会被动画放大
+        panelIsResizable = true
+        let size = savedPopupSize()
+        let textW = size.width - convoPad * 2
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: size.width, height: size.height))
+        container.autoresizingMask = [.width, .height]
 
-        // transcript(可选中、滚动);底部留出输入栏 + 留白,顶部留内边距
-        let scroll = NSScrollView(frame: NSRect(x: convoPad, y: inputBarH + transcriptBottomGap, width: textW, height: visibleH))
+        // transcript(可选中、滚动、缩放时重排);顶部留内边距,底部留出输入栏 + 留白
+        let scrollH = max(40, size.height - inputBarH - transcriptBottomGap - convoPad)
+        let scroll = NSScrollView(frame: NSRect(x: convoPad, y: inputBarH + transcriptBottomGap, width: textW, height: scrollH))
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = true
@@ -608,16 +640,16 @@ final class PopupController {
         convoTextView = tv
 
         // 底部输入栏(常驻;解释期间禁用)
-        container.addSubview(makeInputBar(width: convoW))
+        container.addSubview(makeInputBar(width: size.width))
 
         assistantStart = 0
         assistantAccum = ""
         turnStartLoc = 0
 
-        var rect = NSRect(x: origin.x, y: origin.y, width: convoW, height: panelH)
+        addGrip(to: container)
+        var rect = NSRect(x: origin.x, y: origin.y, width: size.width, height: size.height)
         rect = clampToScreen(rect)
-        present(content: container, rect: rect, animateFrame: false)   // 会话切换:直接定尺寸,不做帧动画
-        startConvoTimer()             // 立即启动生长(不依赖 completionHandler,后者在本类浮窗下不可靠)
+        present(content: container, rect: rect, animateFrame: false)   // 直接定尺寸,不做帧动画
     }
 
     // 建会话浮窗:transcript 滚动区 + 底部追问输入栏(解释时禁用),发起第一轮解释
@@ -625,7 +657,7 @@ final class PopupController {
         stopConversation()
         attachedImageDataURL = nil
         convo = [(role: "user", content: firstUserText)]
-        let panelH = convoPad + 22 + transcriptBottomGap + inputBarH
+        let panelH = savedPopupSize().height
         // 顶边对齐:从按钮切到会话时保持「顶边」不动(会话向下生长,顶边贴着选区上沿)
         let origin: NSPoint
         if let fo = fixedOrigin { origin = fo }
@@ -646,24 +678,23 @@ final class PopupController {
         }
         attachedImageDataURL = dataURL
         convo = [(role: "user", content: instruction)]
-        let panelH = convoPad + 22 + transcriptBottomGap + inputBarH
+        let panelH = savedPopupSize().height
         let origin: NSPoint
         if let fo = fixedOrigin { origin = fo }
         else {
             let vf = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
-            origin = NSPoint(x: vf.midX - convoW / 2, y: vf.maxY - 80 - panelH)
+            origin = NSPoint(x: vf.midX - savedPopupSize().width / 2, y: vf.maxY - 80 - panelH)
         }
         installConversationPanel(at: origin)
         // 顶部:缩略图 + 指令气泡(在 sendTurn 之前插入,流式答案接其后)
         if let tv = convoTextView, let storage = tv.textStorage {
-            storage.append(thumbnailString(image, maxW: convoW - convoPad * 2))
+            storage.append(thumbnailString(image, maxW: savedPopupSize().width - convoPad * 2))
             storage.append(NSAttributedString(string: instruction + "\n", attributes: [
                 .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
                 .foregroundColor: NSColor.labelColor,
                 .paragraphStyle: MD.bodyStyle()]))
         }
         sendTurn()
-        growConversation(force: true)
     }
 
     // 把图缩放后做成行内附件(贴合浮窗内宽,高度上限 240),返回带尾随换行的富文本
@@ -781,7 +812,6 @@ final class PopupController {
 
     // 一轮完成:把刚流式的纯文本段替换为 markdown 重渲染,记入上下文,开放追问输入
     private func finishTurn(_ full: String) {
-        convoTimer?.invalidate(); convoTimer = nil
         convoTask = nil
         guard convoTextView != nil else { return }   // 会话已被关闭:忽略迟到的完成回调
         let text = full.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -789,12 +819,11 @@ final class PopupController {
         lastResult = text
         if let tv = convoTextView, let storage = tv.textStorage {
             let len = max(0, storage.length - assistantStart)
-            let rendered = MD.render(text, width: convoW - convoPad * 2, baseFont: convoFont, textColor: .labelColor)
+            let rendered = MD.render(text, width: (panel?.frame.width ?? convoW) - convoPad * 2, baseFont: convoFont, textColor: .labelColor)
             storage.replaceCharacters(in: NSRange(location: assistantStart, length: len), with: rendered)
         }
         setInputEnabled(true, placeholder: "继续追问…(回车发送)")
         focusAskField()
-        growConversation(force: true)
         scrollTranscript(toLocation: turnStartLoc)   // 一轮完成后回到本轮开头(从头读)
 
         if uiTestMode {
@@ -819,7 +848,6 @@ final class PopupController {
     }
 
     private func convoError(_ msg: String) {
-        convoTimer?.invalidate(); convoTimer = nil
         convoTask = nil
         guard convoTextView != nil else { return }   // 会话已被关闭:忽略迟到的错误回调
         let hasAssistant = convo.contains { $0.role == "assistant" }
@@ -839,7 +867,6 @@ final class PopupController {
         }
         setInputEnabled(true, placeholder: "继续追问…(回车发送)")
         focusAskField()
-        growConversation(force: true)
         scrollTranscriptToBottom()
     }
 
@@ -853,7 +880,6 @@ final class PopupController {
         turnStartLoc = tv.textStorage?.length ?? 0   // 本轮起点(含追问气泡),失败整轮回滚
         appendUserBubble(q, to: tv)
         convo.append((role: "user", content: q))
-        startConvoTimer()
         sendTurn()
     }
 
@@ -896,47 +922,6 @@ final class PopupController {
         p.makeFirstResponder(field)
     }
 
-    private func startConvoTimer() {
-        convoTimer?.invalidate()
-        let t = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in self?.growConversation(force: false) }
-        RunLoop.main.add(t, forMode: .common)
-        convoTimer = t
-    }
-
-    // 按真实内容高度平滑长高:顶边跟随当前窗口位置(拖到哪长到哪,不抢回原位),
-    // 高度被"当前顶边到屏底的可用空间"限制 → 顶边稳定不抖、贴底自动转内部滚动。底部输入栏高度始终预留。
-    private func growConversation(force: Bool) {
-        guard let p = panel, let tv = convoTextView,
-              let tc = tv.textContainer, let lm = tv.layoutManager else { return }
-        lm.ensureLayout(for: tc)
-        let contentH = max(22, ceil(lm.usedRect(for: tc).height))
-        let cur = p.frame
-        let vf = screenFor(cur).visibleFrame
-        let top = cur.maxY                                  // 当前顶边(用户拖动后跟随)
-        let availBelow = top - vf.minY - 6                  // 顶边到屏底可用空间
-        let cap = min(availBelow, vf.height * 0.82)        // 用到屏幕 82% 高度,长解释也尽量一屏显示更多
-        let maxContentH = max(60, cap - convoPad - inputBarH - transcriptBottomGap)
-        let visibleH = min(contentH, maxContentH)
-        let panelH = convoPad + visibleH + transcriptBottomGap + inputBarH
-        if !force && abs(panelH - cur.height) < 1 { return }
-        if uiTestMode { logLine("GROW h=\(Int(panelH)) content=\(Int(contentH)) force=\(force)") }
-        var rect = NSRect(x: cur.origin.x, y: top - panelH, width: convoW, height: panelH)
-        // 垂直方向已被 availBelow 限制不会越界(顶边稳定);仅水平兜底
-        if rect.maxX > vf.maxX { rect.origin.x = vf.maxX - rect.width - 6 }
-        if rect.minX < vf.minX { rect.origin.x = vf.minX + 6 }
-        if force {
-            NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.16
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                ctx.allowsImplicitAnimation = true
-                p.animator().setFrame(rect, display: true)
-            })
-        } else {
-            p.setFrame(rect, display: true)   // 流式增长:50ms 节流本身够平滑,非动画避免每帧动画相互打断
-        }
-        scrollTranscriptToBottom()
-    }
-
     private func screenFor(_ rect: NSRect) -> NSScreen {
         NSScreen.screens.first(where: { $0.frame.contains(NSPoint(x: rect.midX, y: rect.midY)) })
             ?? NSScreen.main ?? NSScreen.screens[0]
@@ -961,7 +946,6 @@ final class PopupController {
     // 彻底结束会话:取消网络、停定时器、清状态(失焦关闭 / 新划词 / 新会话时)
     private func stopConversation() {
         convoTask?.cancel(); convoTask = nil
-        convoTimer?.invalidate(); convoTimer = nil
         convoTextView = nil
         convoScroll = nil
         askField = nil
@@ -986,34 +970,44 @@ final class PopupController {
     private func showMessage(_ message: String, isError: Bool, showCopy: Bool = false, markdown: Bool = false) {
         lastResult = showCopy ? message : nil
         copyButton = nil
+        panelIsResizable = showCopy          // 译文结果:可缩放 + 记忆;翻译中/错误:瞬时小窗
         let origin = panel?.frame.origin ?? NSEvent.mouseLocation
 
-        let w: CGFloat = 420
         let pad: CGFloat = 14
         let footerH: CGFloat = 36
         let bottomInset: CGFloat = showCopy ? footerH : pad
-        let textW = w - pad * 2
         let font = NSFont.systemFont(ofSize: 14)
         let textColor = isError ? NSColor.systemRed : NSColor.labelColor
+
+        let w: CGFloat = showCopy ? savedPopupSize().width : 420
+        let textW = w - pad * 2
 
         // 译文按 markdown 渲染;其它(翻译中/错误)纯文本
         let attr = markdown
             ? MD.render(message, width: textW, baseFont: font, textColor: textColor)
             : NSAttributedString(string: message, attributes: [.font: font, .foregroundColor: textColor])
 
-        // 测真实高度,超过上限就用滚动条(应对超长译文 + 换行)
         let contentH = max(20, measuredTextHeight(attr, width: textW))
-        let screenH = screenFor(NSRect(x: origin.x, y: origin.y, width: w, height: 1)).visibleFrame.height
-        let maxContentH = min(440, screenH - 140)
-        let visibleH = min(contentH, maxContentH)
-        let panelH = pad + visibleH + bottomInset
+        let panelH: CGFloat
+        let visibleH: CGFloat
+        if showCopy {                        // 结果浮窗:记忆固定尺寸,内容滚动
+            panelH = savedPopupSize().height
+            visibleH = max(40, panelH - pad - bottomInset)
+        } else {
+            let screenH = screenFor(NSRect(x: origin.x, y: origin.y, width: w, height: 1)).visibleFrame.height
+            let maxContentH = min(440, screenH - 140)
+            visibleH = min(contentH, maxContentH)
+            panelH = pad + visibleH + bottomInset
+        }
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: w, height: panelH))
+        if showCopy { container.autoresizingMask = [.width, .height] }
         let scroll = NSScrollView(frame: NSRect(x: pad, y: bottomInset, width: textW, height: visibleH))
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = contentH > maxContentH
+        scroll.hasVerticalScroller = showCopy || contentH > visibleH
         scroll.autohidesScrollers = true
+        if showCopy { scroll.autoresizingMask = [.width, .height] }
 
         let tv = makeRenderingTextView(width: textW)
         tv.textColor = textColor
@@ -1022,19 +1016,22 @@ final class PopupController {
         scroll.documentView = tv
         container.addSubview(scroll)
 
-        // 译文结果:底部加分隔线 + 「复制」按钮
+        // 译文结果:底部分隔线 + 「复制」按钮 + 右下握把
         if showCopy {
             let line = NSView(frame: NSRect(x: pad, y: footerH, width: textW, height: 1))
             line.wantsLayer = true
             line.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+            line.autoresizingMask = [.width, .maxYMargin]
             container.addSubview(line)
             let cbW: CGFloat = 70, cbH: CGFloat = 24
             let cb = HoverButton(frame: NSRect(x: w - pad - cbW, y: (footerH - cbH) / 2, width: cbW, height: cbH))
             cb.labelText = "复制"
             cb.target = self
             cb.action = #selector(onCopyClicked)
+            cb.autoresizingMask = [.minXMargin, .maxYMargin]
             container.addSubview(cb)
             copyButton = cb
+            addGrip(to: container)
         }
 
         var rect = NSRect(x: origin.x, y: origin.y, width: w, height: panelH)
@@ -1043,10 +1040,35 @@ final class PopupController {
         tv.scrollRangeToVisible(NSRange(location: 0, length: 0))
     }
 
+    private func savedPopupSize() -> NSSize {
+        if let a = UserDefaults.standard.array(forKey: kPopupSizeKey) as? [CGFloat], a.count == 2,
+           a[0] >= minPopupSize.width, a[1] >= minPopupSize.height {
+            return NSSize(width: a[0], height: a[1])
+        }
+        return defaultPopupSize
+    }
+    private func savePopupSize(_ s: NSSize) { UserDefaults.standard.set([s.width, s.height], forKey: kPopupSizeKey) }
+
+    // 给内容浮窗右下角加拖拽握把(松手存尺寸)
+    private func addGrip(to container: NSView) {
+        let g = ResizeGripView(frame: NSRect(x: container.bounds.width - 18, y: 0, width: 18, height: 18))
+        g.autoresizingMask = [.minXMargin, .maxYMargin]
+        g.onCommit = { [weak self] in guard let self = self, let p = self.panel else { return }; self.savePopupSize(p.frame.size) }
+        container.addSubview(g)
+    }
+
+    // 边缘缩放结束:记住尺寸(仅内容浮窗)
+    func windowDidEndLiveResize(_ notification: Notification) {
+        guard panelIsResizable, let p = panel else { return }
+        savePopupSize(p.frame.size)
+    }
+
     private func makePanel(_ rect: NSRect) -> NSPanel {
         let p = KeyablePanel(contentRect: rect,
-                        styleMask: [.borderless, .nonactivatingPanel],
+                        styleMask: [.borderless, .nonactivatingPanel, .resizable],
                         backing: .buffered, defer: false)
+        p.minSize = minPopupSize
+        p.delegate = self
         p.isFloatingPanel = true
         p.level = .floating
         p.hidesOnDeactivate = false
