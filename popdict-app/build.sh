@@ -21,8 +21,9 @@ else
 fi
 
 echo "==> 1/5 编译 universal 二进制 (arm64 + x86_64)"
-swiftc main.swift -target arm64-apple-macos${MIN_OS}  -o /tmp/popdict_arm64 -swift-version 5 -framework AppKit -framework ApplicationServices -O
-swiftc main.swift -target x86_64-apple-macos${MIN_OS} -o /tmp/popdict_x86   -swift-version 5 -framework AppKit -framework ApplicationServices -O
+SRCS="main.swift Markdown.swift"
+swiftc $SRCS -target arm64-apple-macos${MIN_OS}  -o /tmp/popdict_arm64 -swift-version 5 -framework AppKit -framework ApplicationServices -O
+swiftc $SRCS -target x86_64-apple-macos${MIN_OS} -o /tmp/popdict_x86   -swift-version 5 -framework AppKit -framework ApplicationServices -O
 lipo -create -output /tmp/popdict_uni /tmp/popdict_arm64 /tmp/popdict_x86
 echo "    架构: $(lipo -archs /tmp/popdict_uni)"
 
