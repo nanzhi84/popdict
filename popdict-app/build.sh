@@ -72,9 +72,11 @@ popdict 划词翻译 / 截图解释 —— 安装 3 步
    系统设置 → 隐私与安全性 → 辅助功能 → 把 popdict 的开关打开。
    (这是划词监听必需的权限,不开就不会冒泡。)
 
-填 API Key(小米 MiMo,去 https://platform.xiaomimimo.com/ 申请):
-   打开「终端」粘贴一行(把 your-mimo-key 换成你的 key):
-   mkdir -p ~/.config/popdict && echo 'your-mimo-key' > ~/.config/popdict/mimo_key
+填 API Key(图形界面,无需命令行):
+   点菜单栏 🌐 →「设置…」,里面预置了 DeepSeek 和 MiMo 两个厂商。
+   在想用的那个里填上 API Key、勾「当前使用」、点保存即可。
+   申请 Key:MiMo https://platform.xiaomimimo.com/  DeepSeek https://platform.deepseek.com/
+   (截图解释要看图,只有勾了「支持看图」的厂商能用,预置里 MiMo 已勾。)
 
 用法:
  - 划词:任意 App 里选中一段文字 → 旁边冒出「🌐 翻译」「💡 解释」→ 点它出结果。
