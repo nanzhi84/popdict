@@ -15,14 +15,11 @@ import os.log
 
 let kConfigDir = (("~/.config/popdict" as NSString).expandingTildeInPath)
 let kLogPath = kConfigDir + "/popdict.log"
-let kKeyPath = kConfigDir + "/mimo_key"          // 原 deepseek_key,已全量切到 MiMo
+let kKeyPath = kConfigDir + "/mimo_key"          // 旧版单 key 文件,仅用于首启迁移到 config.json
 
-// MARK: - 模型后端(小米 MiMo,OpenAI 兼容)
+// MARK: - 模型后端(当前厂商由 AppConfig 决定,见 Config.swift)
 
-let kAPIBase = "https://api.xiaomimimo.com/v1"
-let kChatPath = "/chat/completions"              // 完整地址 = kAPIBase + kChatPath
-let kModel = "mimo-v2.5"                          // 多模态:同时管文字翻译/解释与看图
-let kMaxTokens = 4096
+let kMaxTokens = 4096                             // 单次输出上限(随请求体发送)
 
 @discardableResult
 func ensureConfigDir() -> Bool {
@@ -66,10 +63,10 @@ func logLine(_ s: String) {
 
 // MARK: - API Key / 语言判断
 
+// 当前厂商的 key(空算无);供菜单状态等处复用
 func readAPIKey() -> String? {
-    guard let raw = try? String(contentsOfFile: kKeyPath, encoding: .utf8) else { return nil }
-    let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    return key.isEmpty ? nil : key
+    guard let k = AppConfig.shared.active?.apiKey, !k.isEmpty else { return nil }
+    return k
 }
 
 func hasChinese(_ s: String) -> Bool {
@@ -208,15 +205,15 @@ func selectedTextViaCopy() -> String? {
 // MARK: - 翻译(MiMo)
 
 func translate(_ text: String, completion: @escaping (String?, String?) -> Void) {
-    guard let apiKey = readAPIKey() else {
-        completion(nil, "没找到 API Key。请把 MiMo Key 写进:\n\(kKeyPath)")
+    guard let prov = AppConfig.shared.active, !prov.apiKey.isEmpty else {
+        completion(nil, "没配置 API Key。请点菜单栏 🌐 →「设置…」填入当前厂商的 Key")
         return
     }
     let target = hasChinese(text) ? "English" : "Simplified Chinese"
     let sys = "You are a professional translation engine. Translate the user's text into \(target). Output ONLY the translation itself — no explanations, no quotes, no extra words."
 
     let body: [String: Any] = [
-        "model": kModel,
+        "model": prov.model,
         "messages": [
             ["role": "system", "content": sys],
             ["role": "user", "content": text]
@@ -226,14 +223,14 @@ func translate(_ text: String, completion: @escaping (String?, String?) -> Void)
         "thinking": ["type": "disabled"],
         "stream": false
     ]
-    guard let url = URL(string: kAPIBase + kChatPath),
+    guard let url = URL(string: prov.chatURL),
           let data = try? JSONSerialization.data(withJSONObject: body) else {
         completion(nil, "请求构造失败"); return
     }
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    req.setValue("Bearer \(prov.apiKey)", forHTTPHeaderField: "Authorization")
     req.httpBody = data
     req.timeoutInterval = 30
 
@@ -243,7 +240,7 @@ func translate(_ text: String, completion: @escaping (String?, String?) -> Void)
             return
         }
         if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
-            DispatchQueue.main.async { completion(nil, "MiMo 出错(HTTP \(http.statusCode)),请检查 Key 或余额") }
+            DispatchQueue.main.async { completion(nil, "\(prov.name) 出错(HTTP \(http.statusCode)),请检查 Key 或余额") }
             return
         }
         guard let respData = respData,
@@ -279,26 +276,26 @@ func chatStream(_ messages: [[String: Any]],
                 onDelta: @escaping (String) -> Void,
                 onDone: @escaping (String) -> Void,
                 onError: @escaping (String) -> Void) -> Task<Void, Never>? {
-    guard let apiKey = readAPIKey() else {
-        onError("没找到 API Key。请把 MiMo Key 写进:\n\(kKeyPath)")
+    guard let prov = AppConfig.shared.active, !prov.apiKey.isEmpty else {
+        onError("没配置 API Key。请点菜单栏 🌐 →「设置…」填入当前厂商的 Key")
         return nil
     }
     let body: [String: Any] = [
-        "model": kModel,
+        "model": prov.model,
         "messages": messages,
         "temperature": 0.5,
         "max_completion_tokens": kMaxTokens,
         "thinking": ["type": "disabled"],
         "stream": true
     ]
-    guard let url = URL(string: kAPIBase + kChatPath),
+    guard let url = URL(string: prov.chatURL),
           let data = try? JSONSerialization.data(withJSONObject: body) else {
         onError("请求构造失败"); return nil
     }
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    req.setValue("Bearer \(prov.apiKey)", forHTTPHeaderField: "Authorization")
     req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
     req.httpBody = data
     req.timeoutInterval = 60
@@ -308,7 +305,7 @@ func chatStream(_ messages: [[String: Any]],
         do {
             let (bytes, resp) = try await URLSession.shared.bytes(for: req)
             if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
-                await MainActor.run { onError("MiMo 出错(HTTP \(http.statusCode)),请检查 Key 或余额") }
+                await MainActor.run { onError("\(prov.name) 出错(HTTP \(http.statusCode)),请检查 Key 或余额") }
                 return
             }
             for try await line in bytes.lines {
@@ -330,7 +327,7 @@ func chatStream(_ messages: [[String: Any]],
             let full = accum
             await MainActor.run {
                 if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    onError("MiMo 没有返回内容")
+                    onError("\(prov.name) 没有返回内容")
                 } else {
                     onDone(full)
                 }
