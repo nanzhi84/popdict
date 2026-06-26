@@ -1349,7 +1349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: scrOK ? "✓ 屏幕录制:已授权" : "⚠️ 屏幕录制:未授权(截图解释需要)",
                                 action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ""))   // 不用 ⌘, 避免 macOS 自动加齿轮图标(会让整菜单多出图标列、看着缩进)
         menu.addItem(NSMenuItem(title: "辅助功能权限设置…", action: #selector(openAXSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "屏幕录制权限设置…", action: #selector(openScreenRecordingSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "重新检查权限", action: #selector(recheck), keyEquivalent: ""))
