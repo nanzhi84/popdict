@@ -2,7 +2,7 @@ import AppKit
 
 // ============================================================
 // 轻量 Markdown → NSAttributedString 渲染器(块级 + 行内)
-// 块级:标题 # ~ ######、无序/有序列表、代码块 ```、分隔线 ---、引用 >
+// 块级:标题 # ~ ######、无序/有序列表、代码块 ```、分隔线 ---、引用 >、表格 | a | b |
 // 行内:**粗体** *斜体* `行内代码` [链接](url)  ← 复用 Apple 的 inline 解析
 // 自包含,无外部依赖,可单独编译做离屏测试。
 // ============================================================
@@ -67,6 +67,22 @@ enum MD {
                 flushPara()
                 out.append(headingAttr(content, level: level, baseFont: baseFont, color: textColor))
                 i += 1; continue
+            }
+            // 表格(GFM):本行含 | 且下一行是 |---|---| 分隔行
+            if t.contains("|"), i + 1 < lines.count, isTableDelimiter(lines[i + 1]) {
+                flushPara()
+                let header = splitTableRow(line)
+                let aligns = tableAligns(lines[i + 1], columns: header.count)
+                var rows: [[String]] = []
+                i += 2
+                while i < lines.count {
+                    let rt = lines[i].trimmingCharacters(in: .whitespaces)
+                    if rt.isEmpty || !rt.contains("|") { break }
+                    rows.append(splitTableRow(lines[i]))
+                    i += 1
+                }
+                out.append(tableAttr(header: header, aligns: aligns, rows: rows, baseFont: baseFont, color: textColor))
+                continue
             }
             // 引用
             if t.hasPrefix(">") {
@@ -230,6 +246,77 @@ enum MD {
         m.append(body)
         m.append(NSAttributedString(string: "\n"))
         return m
+    }
+
+    // MARK: 表格(GFM → NSTextTable)
+
+    // 判定是否为表格分隔行,如 |---|:--:|--:|(每格只含 - : 且至少一个 -)
+    private static func isTableDelimiter(_ line: String) -> Bool {
+        guard line.contains("-"), line.contains("|") else { return false }
+        let cells = splitTableRow(line)
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            let c = cell.trimmingCharacters(in: .whitespaces)
+            return !c.isEmpty && c.contains("-") && c.allSatisfy { $0 == "-" || $0 == ":" }
+        }
+    }
+
+    // 拆一行表格为单元格:去掉首尾 |,按 | 分(不处理转义 \| —— 罕见,够用)
+    private static func splitTableRow(_ line: String) -> [String] {
+        var s = line.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("|") { s.removeFirst() }
+        if s.hasSuffix("|") { s.removeLast() }
+        return s.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    // 从分隔行解析每列对齐(:--- 左 / :--: 中 / ---: 右)
+    private static func tableAligns(_ line: String, columns: Int) -> [NSTextAlignment] {
+        var a: [NSTextAlignment] = splitTableRow(line).map { cell in
+            let c = cell.trimmingCharacters(in: .whitespaces)
+            let l = c.hasPrefix(":"), r = c.hasSuffix(":")
+            return (l && r) ? .center : (r ? .right : .left)
+        }
+        while a.count < columns { a.append(.left) }
+        return a
+    }
+
+    private static func tableAttr(header: [String], aligns: [NSTextAlignment], rows: [[String]],
+                                  baseFont: NSFont, color: NSColor) -> NSAttributedString {
+        let cols = max(1, header.count)
+        let table = NSTextTable()
+        table.numberOfColumns = cols
+        table.layoutAlgorithm = .automaticLayoutAlgorithm
+        table.hidesEmptyCells = false
+
+        func cell(_ text: String, row: Int, col: Int, isHeader: Bool) -> NSAttributedString {
+            let block = NSTextTableBlock(table: table, startingRow: row, rowSpan: 1, startingColumn: col, columnSpan: 1)
+            block.setBorderColor(NSColor.separatorColor.withAlphaComponent(0.55))
+            block.setWidth(1, type: .absoluteValueType, for: .border)
+            block.setWidth(7, type: .absoluteValueType, for: .padding)
+            if isHeader { block.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.12) }
+            let p = NSMutableParagraphStyle()
+            p.textBlocks = [block]
+            p.alignment = col < aligns.count ? aligns[col] : .left
+            p.lineSpacing = 2
+            let f = isHeader ? NSFont.systemFont(ofSize: baseFont.pointSize, weight: .semibold) : baseFont
+            let m = NSMutableAttributedString(attributedString: inlineAttributed(text, baseFont: f, color: color))
+            if m.length == 0 { m.append(NSAttributedString(string: " ", attributes: [.font: f, .foregroundColor: color])) }
+            m.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: m.length))
+            m.append(NSAttributedString(string: "\n"))
+            return m
+        }
+
+        let out = NSMutableAttributedString()
+        for c in 0..<cols { out.append(cell(c < header.count ? header[c] : "", row: 0, col: c, isHeader: true)) }
+        for (ri, rowCells) in rows.enumerated() {
+            for c in 0..<cols { out.append(cell(c < rowCells.count ? rowCells[c] : "", row: ri + 1, col: c, isHeader: false)) }
+        }
+        // 关闭表格段 + 与下文留白(不带 textBlocks 的普通换行)
+        let tail = NSMutableAttributedString(string: "\n")
+        let tp = NSMutableParagraphStyle(); tp.paragraphSpacingBefore = 4; tp.paragraphSpacing = 9
+        tail.addAttribute(.paragraphStyle, value: tp, range: NSRange(location: 0, length: tail.length))
+        out.append(tail)
+        return out
     }
 
     // MARK: 引用
