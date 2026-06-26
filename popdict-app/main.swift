@@ -1257,8 +1257,9 @@ final class HotKey {
 
 // MARK: - AppDelegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let popup = PopupController()
+    let settings = SettingsController()
     var statusItem: NSStatusItem?
     var hotKey: HotKey?
     var activeCapture: RegionCapture?      // 截图期间强持有 RegionCapture,避免遮罩提前释放
@@ -1316,13 +1317,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let axOK = AXIsProcessTrusted()
         menu.addItem(NSMenuItem(title: axOK ? "✓ 辅助功能:已授权" : "⚠️ 辅助功能:未授权(点下面去开)",
                                 action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: readAPIKey() == nil ? "⚠️ 未填 API Key" : "✓ 已配置 API Key",
+        let act = AppConfig.shared.active
+        let keyOK = !(act?.apiKey.isEmpty ?? true)
+        menu.addItem(NSMenuItem(title: keyOK ? "✓ 当前:\(act?.name ?? "?")(已配置 Key)" : "⚠️ 当前:\(act?.name ?? "未设置")(未填 Key)",
                                 action: nil, keyEquivalent: ""))
         let scrOK = RegionCapture.hasScreenRecordingPermission()
         menu.addItem(NSMenuItem(title: scrOK ? "✓ 屏幕录制:已授权" : "⚠️ 屏幕录制:未授权(截图解释需要)",
                                 action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "📷 截图解释  ⌃⌥E", action: #selector(onScreenshotExplain), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "辅助功能权限设置…", action: #selector(openAXSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "屏幕录制权限设置…", action: #selector(openScreenRecordingSettings), keyEquivalent: ""))
@@ -1374,6 +1378,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // 截图解释:无屏幕录制权限先引导,否则弹框选遮罩,截完交给图片会话浮窗
     @objc func onScreenshotExplain() {
+        guard AppConfig.shared.active?.vision == true else {
+            let a = NSAlert()
+            a.messageText = "当前厂商不支持看图"
+            a.informativeText = "当前使用的「\(AppConfig.shared.active?.name ?? "?")」没有勾选「支持看图」。请点菜单栏 🌐 →「设置…」,切换到一个支持看图的厂商(如 MiMo)。"
+            a.addButton(withTitle: "打开设置"); a.addButton(withTitle: "取消")
+            NSApp.activate(ignoringOtherApps: true)
+            if a.runModal() == .alertFirstButtonReturn { openSettings() }
+            return
+        }
         if !RegionCapture.hasScreenRecordingPermission() {
             let granted = RegionCapture.requestScreenRecordingPermission()
             let a = NSAlert()
@@ -1408,6 +1421,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    @objc func openSettings() { settings.show() }
+
+    // 当前厂商不支持看图时,菜单「📷 截图解释」灰掉
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(onScreenshotExplain) {
+            return AppConfig.shared.active?.vision == true
+        }
+        return true
     }
 
     @objc func recheck() {
