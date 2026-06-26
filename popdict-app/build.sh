@@ -63,7 +63,7 @@ DMGDIR="$(mktemp -d)"
 cp -R "$APP" "$DMGDIR/"
 ln -s /Applications "$DMGDIR/Applications"
 cat > "$DMGDIR/安装说明.txt" <<'TXT'
-popdict 划词翻译 —— 安装 3 步
+popdict 划词翻译 / 截图解释 —— 安装 3 步
 
 1) 把左边的 popdict.app 拖到右边的「Applications」文件夹里。
 2) 打开「应用程序」,右键点 popdict → 选「打开」→ 再点「打开」(只需这一次,绕过未知开发者拦截)。
@@ -72,14 +72,17 @@ popdict 划词翻译 —— 安装 3 步
    系统设置 → 隐私与安全性 → 辅助功能 → 把 popdict 的开关打开。
    (这是划词监听必需的权限,不开就不会冒泡。)
 
-填 API Key:
-   打开「终端」粘贴一行(把 sk-xxx 换成你的 DeepSeek key):
-   mkdir -p ~/.config/popdict && echo 'sk-xxx' > ~/.config/popdict/deepseek_key
+填 API Key(小米 MiMo,去 https://platform.xiaomimimo.com/ 申请):
+   打开「终端」粘贴一行(把 your-mimo-key 换成你的 key):
+   mkdir -p ~/.config/popdict && echo 'your-mimo-key' > ~/.config/popdict/mimo_key
 
-用法:任意 App 里选中一段文字 → 旁边冒出「🌐 翻译」→ 点它 → 出译文。
-   中文→英文,其它语言→简体中文。
+用法:
+ - 划词:任意 App 里选中一段文字 → 旁边冒出「🌐 翻译」「💡 解释」→ 点它出结果。
+   翻译方向:中文→英文,其它语言→简体中文。
+ - 截图解释:按 ⌃⌥E(Control+Option+E)或点菜单栏 🌐 →「📷 截图解释」→ 框选屏幕一块 → AI 看图讲解。
+   首次用要再授「屏幕录制」:系统设置 → 隐私与安全性 → 屏幕录制 → 打开 popdict(授完重开一次 App)。
 
-排查:菜单栏 🌐 → 看「辅助功能」「API Key」是否都打勾。
+排查:菜单栏 🌐 → 看「辅助功能」「API Key」「屏幕录制」是否都打勾。
    日志在 ~/.config/popdict/popdict.log
 TXT
 
