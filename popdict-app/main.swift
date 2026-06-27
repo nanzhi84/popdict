@@ -1087,35 +1087,11 @@ final class PopupController: NSObject, NSWindowDelegate {
         let w: CGFloat = showCopy ? savedPopupSize().width : 420
         let textW = w - pad * 2
 
-        // 最终译文(showCopy+markdown+有原文):渲染「原文 + 译文」双段,各带 🔊;否则保持原逻辑
-        let attr: NSAttributedString
-        if showCopy, markdown, let original = original {
-            let m = NSMutableAttributedString()
-            // 原文段
-            let oid = nextSpeakId()
-            m.append(sectionLabel("原文"))
-            m.append(speakerPrefix(id: oid))
-            let oStart = m.length
-            m.append(NSAttributedString(string: original + "\n", attributes: [
-                .font: NSFont.systemFont(ofSize: 14),
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .paragraphStyle: MD.bodyStyle()]))
-            m.addAttribute(MD.speakIdKey, value: oid, range: NSRange(location: oStart, length: m.length - oStart))
-            // 段间留白
-            m.append(NSAttributedString(string: "\n", attributes: [.font: font, .paragraphStyle: MD.bodyStyle()]))
-            // 译文段
-            let tid = nextSpeakId()
-            m.append(sectionLabel("译文"))
-            m.append(speakerPrefix(id: tid))
-            let tStart = m.length
-            m.append(MD.render(message, width: textW, baseFont: font, textColor: textColor))
-            m.addAttribute(MD.speakIdKey, value: tid, range: NSRange(location: tStart, length: m.length - tStart))
-            attr = m
-        } else {
-            attr = markdown
-                ? MD.render(message, width: textW, baseFont: font, textColor: textColor)
-                : NSAttributedString(string: message, attributes: [.font: font, .foregroundColor: textColor])
-        }
+        // 最终译文(showCopy+markdown+有原文)走「原文/译文」气泡;其余(翻译中/报错/无原文)走单文本
+        let isBubbleResult = showCopy && markdown && (original != nil)
+        let attr: NSAttributedString = markdown
+            ? MD.render(message, width: textW, baseFont: font, textColor: textColor)
+            : NSAttributedString(string: message, attributes: [.font: font, .foregroundColor: textColor])
 
         let contentH = max(20, measuredTextHeight(attr, width: textW))
         let panelH: CGFloat
@@ -1139,11 +1115,28 @@ final class PopupController: NSObject, NSWindowDelegate {
         scroll.autohidesScrollers = true
         if showCopy { scroll.autoresizingMask = [.width, .height] }
 
-        let tv = makeRenderingTextView(width: textW)
-        tv.textColor = textColor
-        tv.minSize = NSSize(width: textW, height: visibleH)
-        tv.textStorage?.setAttributedString(attr)
-        scroll.documentView = tv
+        if isBubbleResult, let original = original {
+            let col = FlippedColumn(frame: NSRect(x: 0, y: 0, width: textW, height: visibleH))
+            col.autoresizingMask = [.width]
+            scroll.documentView = col
+            bubbleColumn = col
+            convoScroll = scroll
+            Speaker.shared.onPlaybackEnded = { [weak self] in
+                self?.playingBubble?.setPlaying(false); self?.playingBubble = nil
+            }
+            let ob = makeBubble(role: .user)
+            ob.setPlainText(original, baseFont: NSFont.systemFont(ofSize: 14, weight: .medium))
+            addBubble(ob)
+            let tb = makeBubble(role: .ai)
+            tb.setMarkdown(message, width: max(80, (textW - 28) * 0.88 - 24), baseFont: font)
+            addBubble(tb)
+        } else {
+            let tv = makeRenderingTextView(width: textW)
+            tv.textColor = textColor
+            tv.minSize = NSSize(width: textW, height: visibleH)
+            tv.textStorage?.setAttributedString(attr)
+            scroll.documentView = tv
+        }
         container.addSubview(scroll)
 
         // 译文结果:底部分隔线 + 「复制」按钮 + 右下握把
@@ -1170,7 +1163,11 @@ final class PopupController: NSObject, NSWindowDelegate {
         // 否则 present 默认帧动画期间 blur 仍是旧的小尺寸(如「翻译中…」),autoresize 以小尺寸为基准
         // 把内容挤出可视区 → 译文整段不显示(只剩分隔线和「复制」)。会话浮窗同理走 animateFrame:false。
         present(content: container, rect: rect, animateFrame: !showCopy)
-        tv.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        if isBubbleResult {
+            relayoutBubbles()
+        } else if let tv = scroll.documentView as? NSTextView {
+            tv.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        }
     }
 
     private func savedPopupSize() -> NSSize {
