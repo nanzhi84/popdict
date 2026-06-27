@@ -667,6 +667,17 @@ final class PopupController: NSObject, NSWindowDelegate {
         else if let pf = panel?.frame { origin = NSPoint(x: pf.minX, y: pf.maxY - panelH) }
         else { origin = NSEvent.mouseLocation }
         installConversationPanel(at: origin)
+        // 顶部显示最初划入的原文(带 🔊),流式答案接其后
+        if let tv = convoTextView, let storage = tv.textStorage {
+            let id = nextSpeakId()
+            storage.append(speakerPrefix(id: id))
+            let start = storage.length
+            storage.append(NSAttributedString(string: firstUserText + "\n", attributes: [
+                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: MD.bodyStyle()]))
+            markSpeakBody(storage, range: NSRange(location: start, length: storage.length - start), id: id)
+        }
         sendTurn()
     }
 
@@ -692,10 +703,14 @@ final class PopupController: NSObject, NSWindowDelegate {
         // 顶部:缩略图 + 指令气泡(在 sendTurn 之前插入,流式答案接其后)
         if let tv = convoTextView, let storage = tv.textStorage {
             storage.append(thumbnailString(image, maxW: savedPopupSize().width - convoPad * 2))
+            let id = nextSpeakId()
+            storage.append(speakerPrefix(id: id))
+            let start = storage.length
             storage.append(NSAttributedString(string: instruction + "\n", attributes: [
                 .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
                 .foregroundColor: NSColor.labelColor,
                 .paragraphStyle: MD.bodyStyle()]))
+            markSpeakBody(storage, range: NSRange(location: start, length: storage.length - start), id: id)
         }
         sendTurn()
     }
