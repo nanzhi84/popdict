@@ -456,6 +456,7 @@ final class PopupController: NSObject, NSWindowDelegate {
     private var assistantAccum = ""
     private var turnStartLoc = 0                                 // 本轮(含追问气泡)在 transcript 的起点,失败可整轮回滚
     private var generation = 0                                   // 递增令牌:关闭/新划词时 +1,作废在途的非流式回调(翻译)
+    private var speakIdSeq = 0                                   // 朗读段落 id 自增计数器(产出 seg1/seg2…,URL 安全)
     private var uiTestMode = false                               // POPDICT_UITEST:自测模式(程序化驱动 + 截图 + 长高日志)
     private let convoFont = NSFont.systemFont(ofSize: 14)
     private let convoW: CGFloat = 460
@@ -732,6 +733,12 @@ final class PopupController: NSObject, NSWindowDelegate {
         tv.isHorizontallyResizable = false
         tv.maxSize = NSSize(width: textW, height: .greatestFiniteMagnitude)
         tv.autoresizingMask = [.width]
+        tv.delegate = self
+        // 让 🔊 链接看起来是普通图标(去蓝色去下划线),悬停显示手型
+        tv.linkTextAttributes = [
+            .foregroundColor: NSColor.labelColor,
+            .cursor: NSCursor.pointingHand
+        ]
         return tv
     }
 
@@ -955,6 +962,51 @@ final class PopupController: NSObject, NSWindowDelegate {
         attachedImageDataURL = nil
         assistantStart = 0
         assistantAccum = ""
+    }
+
+    // MARK: 朗读:🔊 链接 + 正文标记 + 点击朗读
+
+    private func nextSpeakId() -> String { speakIdSeq += 1; return "seg\(speakIdSeq)" }
+
+    // 生成「🔊 」可点击前缀(链接到 speakId);extra 用于让前缀并入所在段的段落样式/气泡背景
+    private func speakerPrefix(id: String, extra: [NSAttributedString.Key: Any] = [:]) -> NSAttributedString {
+        var attrs: [NSAttributedString.Key: Any] = [
+            .link: URL(string: "popdict-speak://" + id) as Any,
+            .font: convoFont,
+            .toolTip: "朗读这一段"
+        ]
+        for (k, v) in extra { attrs[k] = v }
+        return NSAttributedString(string: "🔊 ", attributes: attrs)
+    }
+
+    // 给某段正文范围打 speakId 标记(供朗读时按 id 扫描定位)
+    private func markSpeakBody(_ storage: NSTextStorage, range: NSRange, id: String) {
+        guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
+        storage.addAttribute(MD.speakIdKey, value: id, range: range)
+    }
+
+    // 按 id 扫描出该段连续正文范围 → 取文字交给 Speaker 朗读
+    private func speakSegment(id: String, in textView: NSTextView) {
+        guard let storage = textView.textStorage else { return }
+        var found: NSRange?
+        storage.enumerateAttribute(MD.speakIdKey,
+                                   in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if let v = value as? String, v == id {
+                found = found.map { NSUnionRange($0, range) } ?? range
+            }
+        }
+        guard let body = found else { return }
+        let text = storage.attributedSubstring(from: body).string
+        Speaker.shared.speak(text, in: textView, bodyRange: body, speakId: id)
+    }
+
+    // 翻译面板的小节标签(「原文」「译文」),accent 小字
+    private func sectionLabel(_ s: String) -> NSAttributedString {
+        let p = NSMutableParagraphStyle(); p.paragraphSpacing = 2
+        return NSAttributedString(string: s + "  ", attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: NSColor.controlAccentColor,
+            .paragraphStyle: p])
     }
 
     // 真实测量换行后文本高度(对富文本同样准确)
@@ -1477,6 +1529,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func quit() { NSApp.terminate(nil) }
+}
+
+// MARK: - 朗读链接点击路由
+
+extension PopupController: NSTextViewDelegate {
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        let s: String
+        if let u = link as? URL { s = u.absoluteString }
+        else if let str = link as? String { s = str }
+        else { return false }
+        let scheme = "popdict-speak://"
+        guard s.hasPrefix(scheme) else { return false }
+        speakSegment(id: String(s.dropFirst(scheme.count)), in: textView)
+        return true
+    }
 }
 
 // MARK: - 启动
