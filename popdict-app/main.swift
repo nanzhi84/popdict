@@ -1144,38 +1144,22 @@ final class PopupController: NSObject, NSWindowDelegate {
         return rect
     }
 
-    // 把浮窗(及随后展开的会话,按 convoW 宽度预留)定位到选区右侧、顶边对齐选区上沿;
-    // 右侧放不下则放左侧;都放不下则夹紧到屏内。取不到选区坐标时回退到鼠标位置。
+    // 把小按钮定位到选区右侧、顶边对齐选区上沿(按按钮自身尺寸判断,放不下夹回屏内,始终贴近选区)。
+    // 取不到选区坐标时回退到鼠标位置。注:不再按会话宽度 convoW 预留——那会让选区靠右时按钮被甩到最左。
     private func buttonRect(w: CGFloat, h: CGFloat, selectionBounds: CGRect?, fallbackPoint: NSPoint) -> NSRect {
         guard let sel = selectionBounds else {
-            // 无选区坐标:放到鼠标右侧、与鼠标大致同高(右侧弹出的近似,而非下方)
+            // 无选区坐标:以鼠标点为「零宽选区」,同样贴右侧、夹回屏内
             let vf = screenFor(NSRect(x: fallbackPoint.x, y: fallbackPoint.y, width: 1, height: 1)).visibleFrame
-            var x = fallbackPoint.x + 14
-            if x + convoW > vf.maxX - 6 { x = max(vf.minX + 6, fallbackPoint.x - 14 - convoW) }
-            if x < vf.minX + 6 { x = vf.minX + 6 }
-            var y = fallbackPoint.y - h
-            if y + h > vf.maxY - 6 { y = vf.maxY - 6 - h }
-            if y < vf.minY + 6 { y = vf.minY + 6 }
-            return NSRect(x: x, y: y, width: w, height: h)
+            let selAK = CGRect(x: fallbackPoint.x, y: fallbackPoint.y, width: 0, height: 0)
+            let o = popupButtonOrigin(selAK: selAK, w: w, h: h, gap: 14, vf: vf)
+            return NSRect(x: o.x, y: o.y, width: w, height: h)
         }
         // sel:Quartz 屏幕坐标(左上原点)→ AppKit(左下原点,以主屏高度翻转)
         let primaryH = primaryScreenHeight()
         let selAK = CGRect(x: sel.minX, y: primaryH - sel.maxY, width: sel.width, height: sel.height)
-        let selTop = selAK.maxY          // 选区上沿(AppKit)
-        let gap: CGFloat = 12
         let vf = screenFor(selAK).visibleFrame
-        // 水平:按会话宽度 convoW 判断能否放右侧
-        var x = selAK.maxX + gap
-        if x + convoW > vf.maxX - 6 {
-            let leftX = selAK.minX - gap - convoW
-            x = leftX >= vf.minX + 6 ? leftX : max(vf.minX + 6, vf.maxX - convoW - 6)
-        }
-        if x < vf.minX + 6 { x = vf.minX + 6 }
-        // 垂直:浮窗顶边对齐选区上沿(会话向下生长);夹紧到屏内
-        var y = selTop - h
-        if y + h > vf.maxY - 6 { y = vf.maxY - 6 - h }
-        if y < vf.minY + 6 { y = vf.minY + 6 }
-        return NSRect(x: x, y: y, width: w, height: h)
+        let o = popupButtonOrigin(selAK: selAK, w: w, h: h, gap: 12, vf: vf)
+        return NSRect(x: o.x, y: o.y, width: w, height: h)
     }
 
     private func clampToScreen(_ rect: NSRect) -> NSRect {
@@ -1392,7 +1376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释 · v1.2(气泡版)", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释 · v1.3(定位修复)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         let axOK = AXIsProcessTrusted()
         menu.addItem(NSMenuItem(title: axOK ? "✓ 辅助功能:已授权" : "⚠️ 辅助功能:未授权(点下面去开)",
