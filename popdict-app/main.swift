@@ -559,7 +559,7 @@ final class PopupController: NSObject, NSWindowDelegate {
             if let errMsg = errMsg {
                 self.showMessage(errMsg, isError: true)
             } else {
-                self.showMessage(result ?? "(空)", isError: false, showCopy: true, markdown: true)
+                self.showMessage(result ?? "(空)", isError: false, showCopy: true, markdown: true, original: text)
             }
         }
     }
@@ -1050,7 +1050,7 @@ final class PopupController: NSObject, NSWindowDelegate {
         return ceil(lm.usedRect(for: container).height)
     }
 
-    private func showMessage(_ message: String, isError: Bool, showCopy: Bool = false, markdown: Bool = false) {
+    private func showMessage(_ message: String, isError: Bool, showCopy: Bool = false, markdown: Bool = false, original: String? = nil) {
         lastResult = showCopy ? message : nil
         copyButton = nil
         panelIsResizable = showCopy          // 译文结果:可缩放 + 记忆;翻译中/错误:瞬时小窗
@@ -1065,10 +1065,35 @@ final class PopupController: NSObject, NSWindowDelegate {
         let w: CGFloat = showCopy ? savedPopupSize().width : 420
         let textW = w - pad * 2
 
-        // 译文按 markdown 渲染;其它(翻译中/错误)纯文本
-        let attr = markdown
-            ? MD.render(message, width: textW, baseFont: font, textColor: textColor)
-            : NSAttributedString(string: message, attributes: [.font: font, .foregroundColor: textColor])
+        // 最终译文(showCopy+markdown+有原文):渲染「原文 + 译文」双段,各带 🔊;否则保持原逻辑
+        let attr: NSAttributedString
+        if showCopy, markdown, let original = original {
+            let m = NSMutableAttributedString()
+            // 原文段
+            let oid = nextSpeakId()
+            m.append(sectionLabel("原文"))
+            m.append(speakerPrefix(id: oid))
+            let oStart = m.length
+            m.append(NSAttributedString(string: original + "\n", attributes: [
+                .font: NSFont.systemFont(ofSize: 14),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: MD.bodyStyle()]))
+            m.addAttribute(MD.speakIdKey, value: oid, range: NSRange(location: oStart, length: m.length - oStart))
+            // 段间留白
+            m.append(NSAttributedString(string: "\n", attributes: [.font: font, .paragraphStyle: MD.bodyStyle()]))
+            // 译文段
+            let tid = nextSpeakId()
+            m.append(sectionLabel("译文"))
+            m.append(speakerPrefix(id: tid))
+            let tStart = m.length
+            m.append(MD.render(message, width: textW, baseFont: font, textColor: textColor))
+            m.addAttribute(MD.speakIdKey, value: tid, range: NSRange(location: tStart, length: m.length - tStart))
+            attr = m
+        } else {
+            attr = markdown
+                ? MD.render(message, width: textW, baseFont: font, textColor: textColor)
+                : NSAttributedString(string: message, attributes: [.font: font, .foregroundColor: textColor])
+        }
 
         let contentH = max(20, measuredTextHeight(attr, width: textW))
         let panelH: CGFloat
