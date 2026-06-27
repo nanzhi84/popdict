@@ -448,15 +448,10 @@ final class PopupController: NSObject, NSWindowDelegate {
     // 会话(解释 + 追问)状态
     private var convo: [(role: String, content: String)] = []   // 不含 system;首条 user 为原文
     private var attachedImageDataURL: String?                    // 截图解释:本轮会话附带的图(base64 data URL),整段会话期间保留、每轮重发
-    private var convoTextView: NSTextView?                       // 整段对话的 transcript
     private var convoScroll: NSScrollView?
     private var askField: NSTextField?                           // 底部追问输入框
     private var convoTask: Task<Void, Never>?
-    private var assistantStart = 0                               // 当前 assistant 流式段在 transcript 的起点
-    private var assistantAccum = ""
-    private var turnStartLoc = 0                                 // 本轮(含追问气泡)在 transcript 的起点,失败可整轮回滚
     private var generation = 0                                   // 递增令牌:关闭/新划词时 +1,作废在途的非流式回调(翻译)
-    private var speakIdSeq = 0                                   // 朗读段落 id 自增计数器(产出 seg1/seg2…,URL 安全)
     private weak var bubbleColumn: FlippedColumn?                // 对话/译文气泡列(scroll 的 documentView)
     private weak var currentAIBubble: BubbleView?               // 当前流式中的 AI 气泡
     private weak var currentUserBubble: BubbleView?            // 本轮追问的用户气泡(失败回滚用)
@@ -609,17 +604,12 @@ final class PopupController: NSObject, NSWindowDelegate {
                 try? png.write(to: URL(fileURLWithPath: path)); logLine("UITEST captured \(path)")
             }
         }
-        // 2) 完整 transcript(不受滚动裁剪,验证真实视图里全部 markdown)
-        if let tv = convoTextView {
-            tv.drawsBackground = true
-            tv.backgroundColor = NSColor(calibratedWhite: 0.96, alpha: 1)
-            if let rep = tv.bitmapImageRepForCachingDisplay(in: tv.bounds) {
-                tv.cacheDisplay(in: tv.bounds, to: rep)
-                if let png = rep.representation(using: .png, properties: [:]) {
-                    try? png.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "_full.png")))
-                }
+        // 2) 完整气泡列(不受滚动裁剪,验证真实视图里全部内容)
+        if let col = bubbleColumn, let rep = col.bitmapImageRepForCachingDisplay(in: col.bounds) {
+            col.cacheDisplay(in: col.bounds, to: rep)
+            if let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "_full.png")))
             }
-            tv.drawsBackground = false
         }
     }
 
@@ -653,10 +643,6 @@ final class PopupController: NSObject, NSWindowDelegate {
 
         // 底部输入栏(常驻;解释期间禁用)
         container.addSubview(makeInputBar(width: size.width))
-
-        assistantStart = 0
-        assistantAccum = ""
-        turnStartLoc = 0
 
         addGrip(to: container)
         var rect = NSRect(x: origin.x, y: origin.y, width: size.width, height: size.height)
@@ -749,19 +735,6 @@ final class PopupController: NSObject, NSWindowDelegate {
         tv.isHorizontallyResizable = false
         tv.maxSize = NSSize(width: textW, height: .greatestFiniteMagnitude)
         tv.autoresizingMask = [.width]
-        tv.delegate = self
-        // 让 🔊 链接看起来是普通图标(去蓝色去下划线),悬停显示手型
-        tv.linkTextAttributes = [
-            .foregroundColor: NSColor.labelColor,
-            .cursor: NSCursor.pointingHand
-        ]
-        return tv
-    }
-
-    private func makeTranscriptView(width textW: CGFloat) -> NSTextView {
-        let tv = makeRenderingTextView(width: textW)
-        tv.minSize = NSSize(width: textW, height: 0)
-        tv.typingAttributes = [.font: convoFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: MD.bodyStyle()]
         return tv
     }
 
@@ -803,7 +776,6 @@ final class PopupController: NSObject, NSWindowDelegate {
 
     // 用当前 convo 发起一轮流式;在 transcript 末尾接续 assistant 段
     private func sendTurn() {
-        assistantAccum = ""
         setInputEnabled(false, placeholder: "正在生成…")
         let ai = makeBubble(role: .ai)
         currentAIBubble = ai
@@ -831,7 +803,6 @@ final class PopupController: NSObject, NSWindowDelegate {
     // 逐字追加(流式途中纯文本,避免半截 markdown 错乱);长高交给定时器节流
     private func convoAppendDelta(_ delta: String) {
         guard let bubble = currentAIBubble, panel != nil else { return }
-        assistantAccum += delta
         bubble.appendDelta(delta, baseFont: convoFont)
         relayoutBubbles()
         scrollTranscriptToBottom()
@@ -946,23 +917,11 @@ final class PopupController: NSObject, NSWindowDelegate {
         scroll.reflectScrolledClipView(scroll.contentView)
     }
 
-    // 把某字符位置滚到可视区顶部(一轮结束后从本轮开头开始读)
-    private func scrollTranscript(toLocation loc: Int) {
-        guard let tv = convoTextView, let lm = tv.layoutManager, let tc = tv.textContainer,
-              let scroll = convoScroll, let storage = tv.textStorage else { return }
-        let safe = min(max(0, loc), storage.length)
-        let gr = lm.glyphRange(forCharacterRange: NSRange(location: safe, length: 0), actualCharacterRange: nil)
-        let rect = lm.boundingRect(forGlyphRange: gr, in: tc)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, rect.minY - 2)))
-        scroll.reflectScrolledClipView(scroll.contentView)
-    }
-
     // 彻底结束会话:取消网络、停定时器、清状态(失焦关闭 / 新划词 / 新会话时)
     private func stopConversation() {
         Speaker.shared.stop()
         Speaker.shared.onPlaybackEnded = nil
         convoTask?.cancel(); convoTask = nil
-        convoTextView = nil
         convoScroll = nil
         bubbleColumn = nil
         currentAIBubble = nil
@@ -971,52 +930,6 @@ final class PopupController: NSObject, NSWindowDelegate {
         askField = nil
         convo = []
         attachedImageDataURL = nil
-        assistantAccum = ""
-    }
-
-    // MARK: 朗读:🔊 链接 + 正文标记 + 点击朗读
-
-    private func nextSpeakId() -> String { speakIdSeq += 1; return "seg\(speakIdSeq)" }
-
-    // 生成「🔊 」可点击前缀(链接到 speakId);extra 用于让前缀并入所在段的段落样式/气泡背景
-    private func speakerPrefix(id: String, extra: [NSAttributedString.Key: Any] = [:]) -> NSAttributedString {
-        var attrs: [NSAttributedString.Key: Any] = [
-            .link: URL(string: "popdict-speak://" + id) as Any,
-            .font: convoFont,
-            .toolTip: "朗读这一段"
-        ]
-        for (k, v) in extra { attrs[k] = v }
-        return NSAttributedString(string: "🔊 ", attributes: attrs)
-    }
-
-    // 给某段正文范围打 speakId 标记(供朗读时按 id 扫描定位)
-    private func markSpeakBody(_ storage: NSTextStorage, range: NSRange, id: String) {
-        guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
-        storage.addAttribute(MD.speakIdKey, value: id, range: range)
-    }
-
-    // 按 id 扫描出该段连续正文范围 → 取文字交给 Speaker 朗读
-    private func speakSegment(id: String, in textView: NSTextView) {
-        guard let storage = textView.textStorage else { return }
-        var found: NSRange?
-        storage.enumerateAttribute(MD.speakIdKey,
-                                   in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-            if let v = value as? String, v == id {
-                found = found.map { NSUnionRange($0, range) } ?? range
-            }
-        }
-        guard let body = found else { return }
-        let text = storage.attributedSubstring(from: body).string
-        Speaker.shared.speak(text, in: textView, bodyRange: body, speakId: id)
-    }
-
-    // 翻译面板的小节标签(「原文」「译文」),accent 小字
-    private func sectionLabel(_ s: String) -> NSAttributedString {
-        let p = NSMutableParagraphStyle(); p.paragraphSpacing = 2
-        return NSAttributedString(string: s + "  ", attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
-            .foregroundColor: NSColor.controlAccentColor,
-            .paragraphStyle: p])
     }
 
     // MARK: 气泡列 + 朗读真按钮
@@ -1479,7 +1392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释 · v1.1(朗读版)", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释 · v1.2(气泡版)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         let axOK = AXIsProcessTrusted()
         menu.addItem(NSMenuItem(title: axOK ? "✓ 辅助功能:已授权" : "⚠️ 辅助功能:未授权(点下面去开)",
@@ -1603,21 +1516,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func quit() { NSApp.terminate(nil) }
-}
-
-// MARK: - 朗读链接点击路由
-
-extension PopupController: NSTextViewDelegate {
-    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-        let s: String
-        if let u = link as? URL { s = u.absoluteString }
-        else if let str = link as? String { s = str }
-        else { return false }
-        let scheme = "popdict-speak://"
-        guard s.hasPrefix(scheme) else { return false }
-        speakSegment(id: String(s.dropFirst(scheme.count)), in: textView)
-        return true
-    }
 }
 
 // MARK: - 启动

@@ -13,8 +13,6 @@ enum MD {
     static let codeBlockKey = NSAttributedString.Key("popdictCodeBlock")
     // 追问气泡标记:LayoutManager 据此画浅 accent 圆角底(区分用户追问与 AI 回答)
     static let userMsgKey = NSAttributedString.Key("popdictUserMsg")
-    // 朗读段落标记:Speaker 据此扫描出某段正文的字符范围(取文字 + 逐句高亮定位)
-    static let speakIdKey = NSAttributedString.Key("popdictSpeakId")
 
     // MARK: 主入口
 
