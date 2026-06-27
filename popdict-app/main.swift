@@ -493,6 +493,7 @@ final class PopupController: NSObject, NSWindowDelegate {
         let h: CGFloat = 32, bw: CGFloat = 74, sep: CGFloat = 1
         let w: CGFloat = bw * 2 + sep
         let rect = buttonRect(w: w, h: h, selectionBounds: selectionBounds, fallbackPoint: fallbackPoint)
+        logLine("showButton mouse=(\(Int(fallbackPoint.x)),\(Int(fallbackPoint.y))) selBounds=\(selectionBounds.map { "\(Int($0.minX)),\(Int($0.minY)),\(Int($0.width))x\(Int($0.height))" } ?? "nil") → rect=(\(Int(rect.minX)),\(Int(rect.minY)))")
         let container = NSView(frame: NSRect(x: 0, y: 0, width: w, height: h))
 
         let tBtn = HoverButton(frame: NSRect(x: 0, y: 0, width: bw, height: h))
@@ -1144,21 +1145,12 @@ final class PopupController: NSObject, NSWindowDelegate {
         return rect
     }
 
-    // 把小按钮定位到选区右侧、顶边对齐选区上沿(按按钮自身尺寸判断,放不下夹回屏内,始终贴近选区)。
-    // 取不到选区坐标时回退到鼠标位置。注:不再按会话宽度 convoW 预留——那会让选区靠右时按钮被甩到最左。
+    // 把小按钮锚定到「鼠标松开点」(用户拖选结束处、视线所在),按钮挂在光标下方偏右、夹回屏内。
+    // 不用选区包围盒定位:多行选择时其右缘 = 整列文本右边缘,离实际选中处很远(会飘到天边)。
     private func buttonRect(w: CGFloat, h: CGFloat, selectionBounds: CGRect?, fallbackPoint: NSPoint) -> NSRect {
-        guard let sel = selectionBounds else {
-            // 无选区坐标:以鼠标点为「零宽选区」,同样贴右侧、夹回屏内
-            let vf = screenFor(NSRect(x: fallbackPoint.x, y: fallbackPoint.y, width: 1, height: 1)).visibleFrame
-            let selAK = CGRect(x: fallbackPoint.x, y: fallbackPoint.y, width: 0, height: 0)
-            let o = popupButtonOrigin(selAK: selAK, w: w, h: h, gap: 14, vf: vf)
-            return NSRect(x: o.x, y: o.y, width: w, height: h)
-        }
-        // sel:Quartz 屏幕坐标(左上原点)→ AppKit(左下原点,以主屏高度翻转)
-        let primaryH = primaryScreenHeight()
-        let selAK = CGRect(x: sel.minX, y: primaryH - sel.maxY, width: sel.width, height: sel.height)
-        let vf = screenFor(selAK).visibleFrame
-        let o = popupButtonOrigin(selAK: selAK, w: w, h: h, gap: 12, vf: vf)
+        let vf = screenFor(NSRect(x: fallbackPoint.x, y: fallbackPoint.y, width: 1, height: 1)).visibleFrame
+        let anchor = CGRect(x: fallbackPoint.x, y: fallbackPoint.y, width: 0, height: 0)
+        let o = popupButtonOrigin(selAK: anchor, w: w, h: h, gap: 12, vf: vf)
         return NSRect(x: o.x, y: o.y, width: w, height: h)
     }
 
@@ -1376,7 +1368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释 · v1.3(定位修复)", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释 · v1.4(贴鼠标定位)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         let axOK = AXIsProcessTrusted()
         menu.addItem(NSMenuItem(title: axOK ? "✓ 辅助功能:已授权" : "⚠️ 辅助功能:未授权(点下面去开)",
