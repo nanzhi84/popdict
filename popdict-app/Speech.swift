@@ -14,6 +14,8 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     private var lastHighlight: NSRange?
     private var activeSpeakId: String?
     private let highlightColor = NSColor.controlAccentColor.withAlphaComponent(0.28)
+    // 朗读自然结束/被取消时回调(控制器据此把气泡图标复位)
+    var onPlaybackEnded: (() -> Void)?
 
     override init() {
         super.init()
@@ -87,9 +89,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        clearHighlight(); activeSpeakId = nil
+        clearHighlight(); activeSpeakId = nil; onPlaybackEnded?()
     }
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        clearHighlight(); activeSpeakId = nil
+        clearHighlight(); activeSpeakId = nil; onPlaybackEnded?()
     }
 }
