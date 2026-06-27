@@ -457,6 +457,11 @@ final class PopupController: NSObject, NSWindowDelegate {
     private var turnStartLoc = 0                                 // 本轮(含追问气泡)在 transcript 的起点,失败可整轮回滚
     private var generation = 0                                   // 递增令牌:关闭/新划词时 +1,作废在途的非流式回调(翻译)
     private var speakIdSeq = 0                                   // 朗读段落 id 自增计数器(产出 seg1/seg2…,URL 安全)
+    private weak var bubbleColumn: FlippedColumn?                // 对话/译文气泡列(scroll 的 documentView)
+    private weak var currentAIBubble: BubbleView?               // 当前流式中的 AI 气泡
+    private weak var currentUserBubble: BubbleView?            // 本轮追问的用户气泡(失败回滚用)
+    private weak var playingBubble: BubbleView?                 // 当前朗读中的气泡(切换时复位图标)
+    private var bubbleIdSeq = 0
     private var uiTestMode = false                               // POPDICT_UITEST:自测模式(程序化驱动 + 截图 + 长高日志)
     private let convoFont = NSFont.systemFont(ofSize: 14)
     private let convoW: CGFloat = 460
@@ -635,11 +640,16 @@ final class PopupController: NSObject, NSWindowDelegate {
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.autoresizingMask = [.width, .height]
-        let tv = makeTranscriptView(width: textW)
-        scroll.documentView = tv
+        let col = FlippedColumn(frame: NSRect(x: 0, y: 0, width: textW, height: scrollH))
+        col.autoresizingMask = [.width]
+        scroll.documentView = col
         container.addSubview(scroll)
         convoScroll = scroll
-        convoTextView = tv
+        bubbleColumn = col
+        // 朗读自然结束 → 复位当前气泡图标
+        Speaker.shared.onPlaybackEnded = { [weak self] in
+            self?.playingBubble?.setPlaying(false); self?.playingBubble = nil
+        }
 
         // 底部输入栏(常驻;解释期间禁用)
         container.addSubview(makeInputBar(width: size.width))
@@ -667,17 +677,10 @@ final class PopupController: NSObject, NSWindowDelegate {
         else if let pf = panel?.frame { origin = NSPoint(x: pf.minX, y: pf.maxY - panelH) }
         else { origin = NSEvent.mouseLocation }
         installConversationPanel(at: origin)
-        // 顶部显示最初划入的原文(带 🔊),流式答案接其后
-        if let tv = convoTextView, let storage = tv.textStorage {
-            let id = nextSpeakId()
-            storage.append(speakerPrefix(id: id))
-            let start = storage.length
-            storage.append(NSAttributedString(string: firstUserText + "\n", attributes: [
-                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-                .foregroundColor: NSColor.labelColor,
-                .paragraphStyle: MD.bodyStyle()]))
-            markSpeakBody(storage, range: NSRange(location: start, length: storage.length - start), id: id)
-        }
+        // 顶部:最初划入的原文做成用户气泡(靠右)
+        let ob = makeBubble(role: .user)
+        ob.setPlainText(firstUserText, baseFont: NSFont.systemFont(ofSize: 14, weight: .medium))
+        addBubble(ob)
         sendTurn()
     }
 
@@ -700,18 +703,16 @@ final class PopupController: NSObject, NSWindowDelegate {
             origin = NSPoint(x: vf.midX - savedPopupSize().width / 2, y: vf.maxY - 80 - panelH)
         }
         installConversationPanel(at: origin)
-        // 顶部:缩略图 + 指令气泡(在 sendTurn 之前插入,流式答案接其后)
-        if let tv = convoTextView, let storage = tv.textStorage {
-            storage.append(thumbnailString(image, maxW: savedPopupSize().width - convoPad * 2))
-            let id = nextSpeakId()
-            storage.append(speakerPrefix(id: id))
-            let start = storage.length
-            storage.append(NSAttributedString(string: instruction + "\n", attributes: [
-                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-                .foregroundColor: NSColor.labelColor,
-                .paragraphStyle: MD.bodyStyle()]))
-            markSpeakBody(storage, range: NSRange(location: start, length: storage.length - start), id: id)
-        }
+        // 顶部:缩略图 + 指令做成一个气泡(图在灰底气泡里更自然)
+        let ib = makeBubble(role: .ai)
+        let m = NSMutableAttributedString()
+        m.append(thumbnailString(image, maxW: savedPopupSize().width * 0.66))
+        m.append(NSAttributedString(string: instruction, attributes: [
+            .font: NSFont.systemFont(ofSize: 14),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: MD.bodyStyle()]))
+        ib.textView.textStorage?.setAttributedString(m)
+        addBubble(ib)
         sendTurn()
     }
 
@@ -802,9 +803,11 @@ final class PopupController: NSObject, NSWindowDelegate {
 
     // 用当前 convo 发起一轮流式;在 transcript 末尾接续 assistant 段
     private func sendTurn() {
-        assistantStart = convoTextView?.textStorage?.length ?? 0
         assistantAccum = ""
         setInputEnabled(false, placeholder: "正在生成…")
+        let ai = makeBubble(role: .ai)
+        currentAIBubble = ai
+        addBubble(ai)
         let gen = generation   // 令牌:关窗/换会话(generation+1)后,旧流式回调一律作废,防止污染新会话
         var messages: [[String: Any]] = [["role": "system", "content": kExplainSystem]]
         for (i, m) in convo.enumerated() {
@@ -827,35 +830,33 @@ final class PopupController: NSObject, NSWindowDelegate {
 
     // 逐字追加(流式途中纯文本,避免半截 markdown 错乱);长高交给定时器节流
     private func convoAppendDelta(_ delta: String) {
-        guard let tv = convoTextView, panel != nil else { return }
+        guard let bubble = currentAIBubble, panel != nil else { return }
         assistantAccum += delta
-        tv.textStorage?.append(NSAttributedString(string: delta, attributes: [
-            .font: convoFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: MD.bodyStyle()]))
+        bubble.appendDelta(delta, baseFont: convoFont)
+        relayoutBubbles()
         scrollTranscriptToBottom()
     }
 
     // 一轮完成:把刚流式的纯文本段替换为 markdown 重渲染,记入上下文,开放追问输入
     private func finishTurn(_ full: String) {
         convoTask = nil
-        guard convoTextView != nil else { return }   // 会话已被关闭:忽略迟到的完成回调
+        guard bubbleColumn != nil else { return }   // 会话已被关闭:忽略迟到的完成回调
         let text = full.trimmingCharacters(in: .whitespacesAndNewlines)
         convo.append((role: "assistant", content: text))
         lastResult = text
-        if let tv = convoTextView, let storage = tv.textStorage {
-            let len = max(0, storage.length - assistantStart)
-            let rendered = MD.render(text, width: (panel?.frame.width ?? convoW) - convoPad * 2, baseFont: convoFont, textColor: .labelColor)
-            let id = nextSpeakId()
-            let combined = NSMutableAttributedString()
-            combined.append(speakerPrefix(id: id))
-            let bodyStart = combined.length
-            combined.append(rendered)
-            combined.addAttribute(MD.speakIdKey, value: id,
-                                  range: NSRange(location: bodyStart, length: combined.length - bodyStart))
-            storage.replaceCharacters(in: NSRange(location: assistantStart, length: len), with: combined)
+        if let bubble = currentAIBubble {
+            let colW = convoScroll?.contentView.bounds.width ?? convoW
+            bubble.setMarkdown(text, width: max(80, (colW - 28) * 0.88 - 24), baseFont: convoFont)
+            relayoutBubbles()
+            // 一轮完成后滚到本轮 AI 气泡顶部(从头读)
+            if let scroll = convoScroll {
+                let y = max(0, bubble.frame.minY - 8)
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
         }
         setInputEnabled(true, placeholder: "继续追问…(回车发送)")
         focusAskField()
-        scrollTranscript(toLocation: turnStartLoc)   // 一轮完成后回到本轮开头(从头读)
 
         if uiTestMode {
             let asst = convo.filter { $0.role == "assistant" }.count
@@ -880,7 +881,7 @@ final class PopupController: NSObject, NSWindowDelegate {
 
     private func convoError(_ msg: String) {
         convoTask = nil
-        guard convoTextView != nil else { return }   // 会话已被关闭:忽略迟到的错误回调
+        guard bubbleColumn != nil else { return }   // 会话已被关闭:忽略迟到的错误回调
         let hasAssistant = convo.contains { $0.role == "assistant" }
         // 首轮失败(无论流式是否已吐出半截)→ 回退普通错误浮窗,保留原文上下文不破坏
         if !hasAssistant {
@@ -888,14 +889,13 @@ final class PopupController: NSObject, NSWindowDelegate {
             showMessage(msg, isError: true)
             return
         }
-        // 追问失败:撤掉这轮 user 上下文 + transcript 里本轮气泡和半截回答(整轮回滚),附红字提示,允许重试
+        // 追问失败:撤掉这轮 user 上下文 + 移除本轮追问气泡与半截 AI 气泡(整轮回滚),改插错误气泡,允许重试
         if convo.count > 1, convo.last?.role == "user" { convo.removeLast() }
-        if let tv = convoTextView, let storage = tv.textStorage {
-            let len = max(0, storage.length - turnStartLoc)
-            if len > 0 { storage.deleteCharacters(in: NSRange(location: turnStartLoc, length: len)) }
-            storage.append(NSAttributedString(string: "\n⚠️ \(msg)\n", attributes: [
-                .font: convoFont, .foregroundColor: NSColor.systemRed, .paragraphStyle: MD.bodyStyle()]))
-        }
+        currentAIBubble?.removeFromSuperview(); currentAIBubble = nil
+        currentUserBubble?.removeFromSuperview(); currentUserBubble = nil
+        let err = makeBubble(role: .ai)
+        err.setError("⚠️ \(msg)", baseFont: convoFont)
+        addBubble(err)
         setInputEnabled(true, placeholder: "继续追问…(回车发送)")
         focusAskField()
         scrollTranscriptToBottom()
@@ -903,50 +903,23 @@ final class PopupController: NSObject, NSWindowDelegate {
 
     // 回车发送追问
     @objc private func onAskSubmit() {
-        guard let field = askField, field.isEnabled, let tv = convoTextView else { return }
+        guard let field = askField, field.isEnabled, bubbleColumn != nil else { return }
         let q = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
         if uiTestMode { logLine("onAskSubmit FIRED q=\(q)") }
         Speaker.shared.stop()
         field.stringValue = ""
-        turnStartLoc = tv.textStorage?.length ?? 0   // 本轮起点(含追问气泡),失败整轮回滚
-        appendUserBubble(q, to: tv)
+        appendUserBubble(q)
         convo.append((role: "user", content: q))
         sendTurn()
     }
 
-    // transcript 里追加一条「你的追问」气泡:与上一轮明显拉开 + accent 标签 + 浅 accent 圆角底,
-    // 让用户追问和 AI 回答一眼能分清、轮次之间界限清晰。
-    private func appendUserBubble(_ q: String, to tv: NSTextView) {
-        guard let storage = tv.textStorage else { return }
-        let m = NSMutableAttributedString()
-        // MD.render 去掉了 AI 回答尾部换行,先补一个换行,避免「你的追问」挤到上一行末尾
-        m.append(NSAttributedString(string: "\n", attributes: [.font: convoFont, .paragraphStyle: MD.bodyStyle()]))
-        let pLabel = NSMutableParagraphStyle()
-        pLabel.firstLineHeadIndent = 12; pLabel.headIndent = 12; pLabel.tailIndent = -12
-        pLabel.lineSpacing = 3
-        pLabel.paragraphSpacingBefore = 24   // 与上一轮 AI 回答明显拉开(轮次分隔)
-        pLabel.paragraphSpacing = 3
-        m.append(NSAttributedString(string: "你的追问\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
-            .foregroundColor: NSColor.controlAccentColor,
-            .paragraphStyle: pLabel, MD.userMsgKey: true]))
-        let pBody = NSMutableParagraphStyle()
-        pBody.firstLineHeadIndent = 12; pBody.headIndent = 12; pBody.tailIndent = -12
-        pBody.lineSpacing = 3
-        pBody.paragraphSpacing = 22          // 问题与下面 AI 回答拉开
-        let id = nextSpeakId()
-        // 🔊 前缀并入气泡:带气泡段落样式 + userMsgKey + 同字重,否则会破坏圆角底与缩进
-        m.append(speakerPrefix(id: id, extra: [
-            .paragraphStyle: pBody, MD.userMsgKey: true,
-            .font: NSFont.systemFont(ofSize: 14, weight: .semibold)]))
-        let qStart = m.length
-        m.append(NSAttributedString(string: q + "\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: pBody, MD.userMsgKey: true]))
-        m.addAttribute(MD.speakIdKey, value: id, range: NSRange(location: qStart, length: m.length - qStart))
-        storage.append(m)
+    // 追加一条用户追问气泡(靠右)
+    private func appendUserBubble(_ q: String) {
+        let b = makeBubble(role: .user)
+        b.setPlainText(q, baseFont: NSFont.systemFont(ofSize: 14, weight: .medium))
+        currentUserBubble = b
+        addBubble(b)
     }
 
     private func setInputEnabled(_ enabled: Bool, placeholder: String) {
@@ -967,8 +940,10 @@ final class PopupController: NSObject, NSWindowDelegate {
     }
 
     private func scrollTranscriptToBottom() {
-        guard let tv = convoTextView else { return }
-        tv.scrollRangeToVisible(NSRange(location: tv.textStorage?.length ?? 0, length: 0))
+        guard let col = bubbleColumn, let scroll = convoScroll else { return }
+        let maxY = max(0, col.frame.height - scroll.contentView.bounds.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: maxY))
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     // 把某字符位置滚到可视区顶部(一轮结束后从本轮开头开始读)
@@ -985,13 +960,17 @@ final class PopupController: NSObject, NSWindowDelegate {
     // 彻底结束会话:取消网络、停定时器、清状态(失焦关闭 / 新划词 / 新会话时)
     private func stopConversation() {
         Speaker.shared.stop()
+        Speaker.shared.onPlaybackEnded = nil
         convoTask?.cancel(); convoTask = nil
         convoTextView = nil
         convoScroll = nil
+        bubbleColumn = nil
+        currentAIBubble = nil
+        currentUserBubble = nil
+        playingBubble = nil
         askField = nil
         convo = []
         attachedImageDataURL = nil
-        assistantStart = 0
         assistantAccum = ""
     }
 
@@ -1038,6 +1017,46 @@ final class PopupController: NSObject, NSWindowDelegate {
             .font: NSFont.systemFont(ofSize: 11, weight: .bold),
             .foregroundColor: NSColor.controlAccentColor,
             .paragraphStyle: p])
+    }
+
+    // MARK: 气泡列 + 朗读真按钮
+
+    private func nextBubbleId() -> String { bubbleIdSeq += 1; return "b\(bubbleIdSeq)" }
+
+    private func makeBubble(role: BubbleRole) -> BubbleView {
+        return BubbleView(role: role, speakId: nextBubbleId()) { [weak self] b in self?.onBubbleSpeak(b) }
+    }
+    private func addBubble(_ b: BubbleView) {
+        bubbleColumn?.addSubview(b)
+        relayoutBubbles()
+    }
+    // 重排气泡列:逐个量高、按角色靠左/右、从上往下堆叠,设 documentView 高度
+    private func relayoutBubbles() {
+        guard let col = bubbleColumn, let scroll = convoScroll else { return }
+        let cw = scroll.contentView.bounds.width
+        let colW = cw > 1 ? cw : scroll.frame.width
+        let gap: CGFloat = 10, sidePad: CGFloat = 14, topPad: CGFloat = 12
+        let bubbles = col.subviews.compactMap { $0 as? BubbleView }
+        var y = topPad
+        for b in bubbles {
+            let h = b.layout(inColumnWidth: colW - sidePad * 2)
+            let x = b.role == .ai ? sidePad : colW - sidePad - b.frame.width
+            b.setFrameOrigin(NSPoint(x: x, y: y))
+            y += h + gap
+        }
+        let totalH = max(scroll.contentView.bounds.height, y + topPad)
+        col.setFrameSize(NSSize(width: colW, height: totalH))
+    }
+
+    // 点气泡喇叭:点正在读的=停;否则切过去读
+    @objc private func onBubbleSpeak(_ bubble: BubbleView) {
+        if Speaker.shared.isSpeaking(bubble.speakId) { Speaker.shared.stop(); return }
+        playingBubble?.setPlaying(false)
+        let len = bubble.textView.textStorage?.length ?? 0
+        Speaker.shared.speak(bubble.plainString(), in: bubble.textView,
+                             bodyRange: NSRange(location: 0, length: len), speakId: bubble.speakId)
+        playingBubble = bubble
+        bubble.setPlaying(true)
     }
 
     // 真实测量换行后文本高度(对富文本同样准确)
@@ -1175,6 +1194,7 @@ final class PopupController: NSObject, NSWindowDelegate {
     func windowDidEndLiveResize(_ notification: Notification) {
         guard panelIsResizable, let p = panel else { return }
         savePopupSize(p.frame.size)
+        relayoutBubbles()
     }
 
     private func makePanel(_ rect: NSRect) -> NSPanel {
