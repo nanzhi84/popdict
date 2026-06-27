@@ -1038,7 +1038,10 @@ final class PopupController: NSObject, NSWindowDelegate {
 
         var rect = NSRect(x: origin.x, y: origin.y, width: w, height: panelH)
         rect = clampToScreen(rect)
-        present(content: container, rect: rect)
+        // 结果浮窗(可缩放、container/scroll 带 autoresizing)必须先同步定尺寸再贴内容:
+        // 否则 present 默认帧动画期间 blur 仍是旧的小尺寸(如「翻译中…」),autoresize 以小尺寸为基准
+        // 把内容挤出可视区 → 译文整段不显示(只剩分隔线和「复制」)。会话浮窗同理走 animateFrame:false。
+        present(content: container, rect: rect, animateFrame: !showCopy)
         tv.scrollRangeToVisible(NSRange(location: 0, length: 0))
     }
 
