@@ -1368,7 +1368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释 · v1.4(贴鼠标定位)", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "popdict 划词翻译 / 截图解释 · v1.5(喇叭显示修复)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         let axOK = AXIsProcessTrusted()
         menu.addItem(NSMenuItem(title: axOK ? "✓ 辅助功能:已授权" : "⚠️ 辅助功能:未授权(点下面去开)",

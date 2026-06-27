@@ -44,8 +44,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key><string>popdict</string>
     <key>CFBundleDisplayName</key><string>popdict 划词翻译</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.4</string>
-    <key>CFBundleVersion</key><string>5</string>
+    <key>CFBundleShortVersionString</key><string>1.5</string>
+    <key>CFBundleVersion</key><string>6</string>
     <key>LSMinimumSystemVersion</key><string>${MIN_OS}</string>
     <key>LSUIElement</key><true/>
     <key>NSHumanReadableCopyright</key><string>popdict</string>

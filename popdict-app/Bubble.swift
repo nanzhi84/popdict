@@ -2,26 +2,21 @@ import AppKit
 
 enum BubbleRole { case user, ai }
 
-// 小图标按钮:SF Symbol + hover 提亮(给气泡喇叭用)
+// 小图标按钮:自己画 SF Symbol(绕开 NSButton 的 image/imagePosition 机制——后者在 init/添加时会被
+// AppKit 改成 imageOverlaps 导致图标不显示)。交互沿用本项目 HoverButton 的自定义点击 + hover 提亮。
 final class IconButton: NSButton {
     private var trackingRef: NSTrackingArea?
-    private var hovering = false { didSet { alphaValue = hovering ? 1.0 : 0.72 } }
-    var tint: NSColor = .secondaryLabelColor { didSet { contentTintColor = tint } }
-    var symbolName: String = "speaker.wave.2.fill" {
-        didSet {
-            let cfg = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
-            image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-                .withSymbolConfiguration(cfg)
-        }
-    }
+    private var hovering = false { didSet { needsDisplay = true } }
+    private var pressing = false { didSet { needsDisplay = true } }
+    var tint: NSColor = .secondaryLabelColor { didSet { needsDisplay = true } }
+    var symbolName: String = "speaker.wave.2.fill" { didSet { needsDisplay = true } }
+
     override init(frame f: NSRect) {
         super.init(frame: f)
-        isBordered = false; bezelStyle = .regularSquare; imagePosition = .imageOnly
-        title = ""; focusRingType = .none; wantsLayer = true
-        alphaValue = 0.72
-        symbolName = "speaker.wave.2.fill"
+        isBordered = false; title = ""; focusRingType = .none; wantsLayer = true
     }
     required init?(coder: NSCoder) { fatalError() }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let t = trackingRef { removeTrackingArea(t) }
@@ -29,7 +24,26 @@ final class IconButton: NSButton {
         addTrackingArea(t); trackingRef = t
     }
     override func mouseEntered(with e: NSEvent) { hovering = true }
-    override func mouseExited(with e: NSEvent) { hovering = false }
+    override func mouseExited(with e: NSEvent) { hovering = false; pressing = false }
+    override func mouseDown(with e: NSEvent) { pressing = true }
+    override func mouseDragged(with e: NSEvent) { pressing = bounds.contains(convert(e.locationInWindow, from: nil)) }
+    override func mouseUp(with e: NSEvent) {
+        let inside = bounds.contains(convert(e.locationInWindow, from: nil))
+        pressing = false
+        if inside, let action = action, let target = target { NSApp.sendAction(action, to: target, from: self) }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        let side = min(bounds.width, bounds.height)
+        let cfg = NSImage.SymbolConfiguration(pointSize: side * 0.78, weight: .semibold)
+        guard let img = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg) else { return }
+        img.isTemplate = true
+        let s = img.size
+        let r = NSRect(x: (bounds.width - s.width) / 2, y: (bounds.height - s.height) / 2, width: s.width, height: s.height)
+        img.draw(in: r)
+        tint.withAlphaComponent((hovering || pressing) ? 1.0 : 0.72).set()
+        r.fill(using: .sourceAtop)
+    }
 }
 
 // 翻转坐标的列容器:y 向下增长,气泡按聊天顺序从上往下排
@@ -45,10 +59,10 @@ final class BubbleView: NSView {
     private let speakButton = IconButton(frame: .zero)
     private var onSpeak: ((BubbleView) -> Void)?
 
-    private let pad: CGFloat = 12
-    private let radius: CGFloat = 13
-    private let btn: CGFloat = 18
-    private let btnGap: CGFloat = 5
+    private let pad: CGFloat = 13
+    private let radius: CGFloat = 16
+    private let btn: CGFloat = 15
+    private let btnGap: CGFloat = 3
 
     init(role: BubbleRole, speakId: String, onSpeak: @escaping (BubbleView) -> Void) {
         self.role = role; self.speakId = speakId; self.onSpeak = onSpeak
@@ -67,7 +81,7 @@ final class BubbleView: NSView {
         layer?.cornerRadius = radius
         layer?.backgroundColor = fillColor.cgColor
         addSubview(textView)
-        speakButton.tint = (role == .user) ? NSColor.white : NSColor.secondaryLabelColor
+        speakButton.tint = (role == .user) ? NSColor.white : NSColor.tertiaryLabelColor
         speakButton.target = self
         speakButton.action = #selector(speakTapped)
         addSubview(speakButton)
@@ -86,7 +100,7 @@ final class BubbleView: NSView {
         speakButton.symbolName = playing ? "stop.fill" : "speaker.wave.2.fill"
         speakButton.tint = playing
             ? (role == .user ? .white : .controlAccentColor)
-            : (role == .user ? .white : .secondaryLabelColor)
+            : (role == .user ? .white : .tertiaryLabelColor)
     }
 
     func setPlainText(_ s: String, baseFont: NSFont) {
