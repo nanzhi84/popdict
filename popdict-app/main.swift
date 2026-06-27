@@ -844,7 +844,14 @@ final class PopupController: NSObject, NSWindowDelegate {
         if let tv = convoTextView, let storage = tv.textStorage {
             let len = max(0, storage.length - assistantStart)
             let rendered = MD.render(text, width: (panel?.frame.width ?? convoW) - convoPad * 2, baseFont: convoFont, textColor: .labelColor)
-            storage.replaceCharacters(in: NSRange(location: assistantStart, length: len), with: rendered)
+            let id = nextSpeakId()
+            let combined = NSMutableAttributedString()
+            combined.append(speakerPrefix(id: id))
+            let bodyStart = combined.length
+            combined.append(rendered)
+            combined.addAttribute(MD.speakIdKey, value: id,
+                                  range: NSRange(location: bodyStart, length: combined.length - bodyStart))
+            storage.replaceCharacters(in: NSRange(location: assistantStart, length: len), with: combined)
         }
         setInputEnabled(true, placeholder: "继续追问…(回车发送)")
         focusAskField()
@@ -927,10 +934,17 @@ final class PopupController: NSObject, NSWindowDelegate {
         pBody.firstLineHeadIndent = 12; pBody.headIndent = 12; pBody.tailIndent = -12
         pBody.lineSpacing = 3
         pBody.paragraphSpacing = 22          // 问题与下面 AI 回答拉开
+        let id = nextSpeakId()
+        // 🔊 前缀并入气泡:带气泡段落样式 + userMsgKey + 同字重,否则会破坏圆角底与缩进
+        m.append(speakerPrefix(id: id, extra: [
+            .paragraphStyle: pBody, MD.userMsgKey: true,
+            .font: NSFont.systemFont(ofSize: 14, weight: .semibold)]))
+        let qStart = m.length
         m.append(NSAttributedString(string: q + "\n", attributes: [
             .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: pBody, MD.userMsgKey: true]))
+        m.addAttribute(MD.speakIdKey, value: id, range: NSRange(location: qStart, length: m.length - qStart))
         storage.append(m)
     }
 
