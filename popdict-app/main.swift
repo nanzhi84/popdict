@@ -907,6 +907,7 @@ final class PopupController: NSObject, NSWindowDelegate {
         let q = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
         if uiTestMode { logLine("onAskSubmit FIRED q=\(q)") }
+        Speaker.shared.stop()
         field.stringValue = ""
         turnStartLoc = tv.textStorage?.length ?? 0   // 本轮起点(含追问气泡),失败整轮回滚
         appendUserBubble(q, to: tv)
@@ -983,6 +984,7 @@ final class PopupController: NSObject, NSWindowDelegate {
 
     // 彻底结束会话:取消网络、停定时器、清状态(失焦关闭 / 新划词 / 新会话时)
     private func stopConversation() {
+        Speaker.shared.stop()
         convoTask?.cancel(); convoTask = nil
         convoTextView = nil
         convoScroll = nil
@@ -1051,6 +1053,7 @@ final class PopupController: NSObject, NSWindowDelegate {
     }
 
     private func showMessage(_ message: String, isError: Bool, showCopy: Bool = false, markdown: Bool = false, original: String? = nil) {
+        Speaker.shared.stop()   // 重建面板内容前停止朗读(旧 textview 即将被替换)
         lastResult = showCopy ? message : nil
         copyButton = nil
         panelIsResizable = showCopy          // 译文结果:可缩放 + 记忆;翻译中/错误:瞬时小窗
