@@ -463,6 +463,10 @@ final class PopupController: NSObject, NSWindowDelegate {
     private let inputBarH: CGFloat = 46
     private let transcriptBottomGap: CGFloat = 14   // transcript 与底部输入栏分割线之间的留白
     private var panelIsResizable = false            // 当前态是否「可缩放/记忆」的内容浮窗(结果/会话)
+    private var growTimer: Timer?                   // 会话浮窗随流式内容长高的节流定时器
+    private var userResized = false                 // 本轮会话中用户手动改过尺寸 → 不再自动长高
+    private var frameAnimations = 0                 // 进行中的窗口帧动画计数(>0 时 p.frame 是中间态,长高/存尺寸必须跳过)
+    private var programmaticSize = NSSize.zero      // 最近一次程序化 setFrame 的目标尺寸(识别假 live resize 用)
     private let kPopupSizeKey = "popupSize"
     private let minPopupSize = NSSize(width: 300, height: 180)
     private let defaultPopupSize = NSSize(width: 460, height: 380)
@@ -514,24 +518,37 @@ final class PopupController: NSObject, NSWindowDelegate {
         present(content: container, rect: rect)
     }
 
-    // 首次显示淡入;已有面板则改尺寸 + 内容 crossfade。
-    // animateFrame=false 时直接定尺寸不做帧动画(用于会话浮窗:避免动画期间 container autoresize 累积放大)。
-    private func present(content newBody: NSView, rect: NSRect, animateFrame: Bool = true) {
+    // 首次显示淡入;已有面板则「帧动画到新尺寸 + 内容 crossfade」。
+    // 帧动画期间新旧内容都临时改成「固定尺寸、贴住顶边」(.minYMargin),
+    // 避免 autoresize 以动画中途的尺寸为基准把内容压缩/挤出可视区;动画完成后再恢复跟随窗口。
+    private func present(content newBody: NSView, rect: NSRect) {
+        programmaticSize = rect.size
         if let p = panel, let blur = p.contentView {
-            if !animateFrame { p.setFrame(rect, display: true) }   // 立即定尺寸,blur 同步到位
-            newBody.frame = NSRect(origin: .zero, size: rect.size)
+            let finalMask = newBody.autoresizingMask
+            newBody.autoresizingMask = [.minYMargin]
+            newBody.frame = NSRect(x: 0, y: blur.bounds.height - rect.height,
+                                   width: rect.width, height: rect.height)   // 贴顶、按最终尺寸布局
             newBody.alphaValue = 0
             blur.addSubview(newBody)
             let old = body
+            old?.autoresizingMask = [.minYMargin]
             body = newBody
+            frameAnimations += 1
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = self.switchDur
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 ctx.allowsImplicitAnimation = true
-                if animateFrame { p.animator().setFrame(rect, display: true) }
+                p.animator().setFrame(rect, display: true)
                 old?.animator().alphaValue = 0
                 newBody.animator().alphaValue = 1
-            }, completionHandler: { old?.removeFromSuperview() })
+            }, completionHandler: { [weak self] in
+                old?.removeFromSuperview()
+                guard let self = self else { return }
+                self.frameAnimations -= 1
+                guard self.body === newBody, let blur2 = self.panel?.contentView else { return }
+                newBody.frame = blur2.bounds
+                newBody.autoresizingMask = finalMask
+            })
         } else {
             let p = makePanel(rect)
             newBody.frame = NSRect(origin: .zero, size: rect.size)
@@ -594,6 +611,46 @@ final class PopupController: NSObject, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.onExplainClicked() }
     }
 
+    // UI 自测入口(POPDICT_UITEST=translate):按钮 → 翻译中 → 短译文 → 长译文,
+    // 验证自适应尺寸(短译文小窗、长译文到上限)+ 顶边固定向下生长 + 帧动画;不走网络。
+    func runDemoTranslate() {
+        let p = NSScreen.main.map { NSPoint(x: $0.frame.midX - 100, y: $0.frame.midY + 220) } ?? NSEvent.mouseLocation
+        showButton(text: "hello world", selectionBounds: nil, fallbackPoint: p)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.showMessage("翻译中…", isError: false)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.showMessage("你好,世界", isError: false, showCopy: true, markdown: true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
+            guard let self = self else { return }
+            logLine("UITEST translate short frame=\(NSStringFromRect(self.panel?.frame ?? .zero))")
+            self.capturePanel(to: "\(NSHomeDirectory())/popdict_translate_short.png")
+            let long = """
+            **机器翻译**(Machine Translation)是利用计算机把一种自然语言转换为另一种自然语言的过程。
+
+            核心内容解读:
+
+            1. **什么是"逐轮循环"?**
+                - 这是你最熟悉的交互方式:你发一条指令,AI 读代码、修改、测试,然后把结果交还给你。
+                - 每一轮都由你手动触发,AI 自己判断何时停止。
+            2. **关键问题:AI 如何判断"做完了"?**
+                - 如果不明确告诉 AI 验证标准,它通常只以"代码没报错"作为完成标准。
+            3. **解决方案:用 `SKILL.md` 文件定义验证清单**
+
+            如今的大语言模型不仅能翻译,还能在保留语气、术语和格式的同时按需调整正式程度,\
+            例如把口语化的产品公告改写成正式的新闻稿风格。
+            """
+            self.showMessage(long, isError: false, showCopy: true, markdown: true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) { [weak self] in
+            guard let self = self else { return }
+            logLine("UITEST translate long frame=\(NSStringFromRect(self.panel?.frame ?? .zero))")
+            self.capturePanel(to: "\(NSHomeDirectory())/popdict_translate_long.png")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
+        }
+    }
+
     // App 把自己的浮窗内容渲染成 PNG(不需要屏幕录制权限),用于真实渲染自测
     private func capturePanel(to path: String) {
         // 1) 整个面板(含输入栏)
@@ -617,17 +674,20 @@ final class PopupController: NSObject, NSWindowDelegate {
         }
     }
 
-    // 搭建会话浮窗骨架(transcript 滚动区 + 底部追问输入栏),present 并启动长高定时器。
+    // 搭建会话浮窗骨架(transcript 滚动区 + 底部追问输入栏):从紧凑高度起步,
+    // present 后由长高定时器随流式内容向下生长(顶边固定),长到上限后停、内部滚动。
     // 由 beginConversation(文字解释)与 beginImageConversation(截图解释)共用。
-    private func installConversationPanel(at origin: NSPoint) {
+    private func installConversationPanel(topLeft: NSPoint) {
         panelIsResizable = true
-        let size = savedPopupSize()
-        let textW = size.width - convoPad * 2
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: size.width, height: size.height))
+        userResized = false
+        let w = savedPopupSize().width
+        let startH = minPopupSize.height
+        let textW = w - convoPad * 2
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: w, height: startH))
         container.autoresizingMask = [.width, .height]
 
         // transcript(可选中、滚动、缩放时重排);顶部留内边距,底部留出输入栏 + 留白
-        let scrollH = max(40, size.height - inputBarH - transcriptBottomGap - convoPad)
+        let scrollH = max(40, startH - inputBarH - transcriptBottomGap - convoPad)
         let scroll = NSScrollView(frame: NSRect(x: convoPad, y: inputBarH + transcriptBottomGap, width: textW, height: scrollH))
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -641,37 +701,65 @@ final class PopupController: NSObject, NSWindowDelegate {
         convoTextView = tv
 
         // 底部输入栏(常驻;解释期间禁用)
-        container.addSubview(makeInputBar(width: size.width))
+        container.addSubview(makeInputBar(width: w))
 
         assistantStart = 0
         assistantAccum = ""
         turnStartLoc = 0
 
         addGrip(to: container)
-        var rect = NSRect(x: origin.x, y: origin.y, width: size.width, height: size.height)
+        var rect = NSRect(x: topLeft.x, y: topLeft.y - startH, width: w, height: startH)
         rect = clampToScreen(rect)
-        present(content: container, rect: rect, animateFrame: false)   // 直接定尺寸,不做帧动画
+        present(content: container, rect: rect)
+        startAutoGrow()
+    }
+
+    // —— 会话浮窗随内容长高 ——
+
+    private func startAutoGrow() {
+        growTimer?.invalidate()
+        growTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in self?.growToFit() }
+    }
+
+    // 顶边固定向下生长;只长不缩(防抖);上限见 popupHeightCap;
+    // 触到屏幕下沿后底边贴住、顶边上移;用户手动改过尺寸后交还控制、不再自动长。
+    // 帧动画(present 切换 / 上一次长高)进行中一律跳过:那一刻 p.frame 是中间态,
+    // 采样它再 setFrame 会把动画重定向到中间尺寸,窗口就永远定格在半路(曾经的真 bug)。
+    private func growToFit() {
+        guard frameAnimations == 0, panelIsResizable, !userResized, let p = panel, let tv = convoTextView,
+              let lm = tv.layoutManager, let tc = tv.textContainer else { return }
+        lm.ensureLayout(for: tc)
+        let contentH = ceil(lm.usedRect(for: tc).height)
+        let desired = convoPad + contentH + transcriptBottomGap + inputBarH
+        let vf = screenFor(p.frame).visibleFrame
+        let newH = min(max(desired, minPopupSize.height), popupHeightCap(vf))
+        guard newH > p.frame.height + 1 else { return }
+        let newY = max(p.frame.maxY - newH, vf.minY + kScreenEdgeGap)
+        if uiTestMode { logLine("UITEST grow h=\(Int(p.frame.height))→\(Int(newH)) w=\(Int(p.frame.width))") }
+        programmaticSize = NSSize(width: p.frame.width, height: newH)
+        frameAnimations += 1
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            p.animator().setFrame(NSRect(x: p.frame.minX, y: newY, width: p.frame.width, height: newH), display: true)
+        }, completionHandler: { [weak self] in self?.frameAnimations -= 1 })
     }
 
     // 建会话浮窗:transcript 滚动区 + 底部追问输入栏(解释时禁用),发起第一轮解释
-    private func beginConversation(firstUserText: String, at fixedOrigin: NSPoint? = nil) {
+    private func beginConversation(firstUserText: String) {
         generation += 1   // 作废在途的翻译回调(防止快速「翻译→解释」时旧译文污染会话)
         stopConversation()
         attachedImageDataURL = nil
         convo = [(role: "user", content: firstUserText)]
-        let panelH = savedPopupSize().height
-        // 顶边对齐:从按钮切到会话时保持「顶边」不动(会话向下生长,顶边贴着选区上沿)
-        let origin: NSPoint
-        if let fo = fixedOrigin { origin = fo }
-        else if let pf = panel?.frame { origin = NSPoint(x: pf.minX, y: pf.maxY - panelH) }
-        else { origin = NSEvent.mouseLocation }
-        installConversationPanel(at: origin)
+        // 顶左对齐:从按钮切到会话时顶边不动(贴着选区上沿),随内容向下生长
+        let topLeft = panel.map { NSPoint(x: $0.frame.minX, y: $0.frame.maxY) } ?? NSEvent.mouseLocation
+        installConversationPanel(topLeft: topLeft)
         sendTurn()
     }
 
     // 截图解释:把图存为会话首条 user(每轮重发),顶部放缩略图 + 指令气泡,然后流式解释。
     // 与文字解释共用同一套会话浮窗 + 追问 + 回滚逻辑。
-    func beginImageConversation(image: NSImage, instruction: String = "请解释这张图片的内容。", at fixedOrigin: NSPoint? = nil) {
+    func beginImageConversation(image: NSImage, instruction: String = "请解释这张图片的内容。") {
         generation += 1
         stopConversation()
         guard let dataURL = RegionCapture.encodeToDataURL(image) else {
@@ -680,14 +768,9 @@ final class PopupController: NSObject, NSWindowDelegate {
         }
         attachedImageDataURL = dataURL
         convo = [(role: "user", content: instruction)]
-        let panelH = savedPopupSize().height
-        let origin: NSPoint
-        if let fo = fixedOrigin { origin = fo }
-        else {
-            let vf = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
-            origin = NSPoint(x: vf.midX - savedPopupSize().width / 2, y: vf.maxY - 80 - panelH)
-        }
-        installConversationPanel(at: origin)
+        let vf = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+        let topLeft = NSPoint(x: vf.midX - savedPopupSize().width / 2, y: vf.maxY - 80)
+        installConversationPanel(topLeft: topLeft)
         // 顶部:缩略图 + 指令气泡(在 sendTurn 之前插入,流式答案接其后)
         if let tv = convoTextView, let storage = tv.textStorage {
             storage.append(thumbnailString(image, maxW: savedPopupSize().width - convoPad * 2))
@@ -948,6 +1031,7 @@ final class PopupController: NSObject, NSWindowDelegate {
     // 彻底结束会话:取消网络、停定时器、清状态(失焦关闭 / 新划词 / 新会话时)
     private func stopConversation() {
         convoTask?.cancel(); convoTask = nil
+        growTimer?.invalidate(); growTimer = nil
         convoTextView = nil
         convoScroll = nil
         askField = nil
@@ -957,8 +1041,8 @@ final class PopupController: NSObject, NSWindowDelegate {
         assistantAccum = ""
     }
 
-    // 真实测量换行后文本高度(对富文本同样准确)
-    private func measuredTextHeight(_ attr: NSAttributedString, width: CGFloat) -> CGFloat {
+    // 真实测量换行后文本的自然宽高(对富文本同样准确;宽度用于短内容收窄窗口)
+    private func measuredTextSize(_ attr: NSAttributedString, width: CGFloat) -> NSSize {
         let storage = NSTextStorage(attributedString: attr)
         let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
@@ -966,48 +1050,50 @@ final class PopupController: NSObject, NSWindowDelegate {
         lm.addTextContainer(container)
         storage.addLayoutManager(lm)
         lm.ensureLayout(for: container)
-        return ceil(lm.usedRect(for: container).height)
+        let used = lm.usedRect(for: container)
+        return NSSize(width: ceil(used.width), height: ceil(used.height))
     }
 
     private func showMessage(_ message: String, isError: Bool, showCopy: Bool = false, markdown: Bool = false) {
         lastResult = showCopy ? message : nil
         copyButton = nil
-        panelIsResizable = showCopy          // 译文结果:可缩放 + 记忆;翻译中/错误:瞬时小窗
-        let origin = panel?.frame.origin ?? NSEvent.mouseLocation
+        panelIsResizable = showCopy          // 译文结果:可缩放 + 记忆上限;翻译中/错误:瞬时小窗
+        // 锚点:顶左固定(接住按钮/上一态的顶边,向下生长);没有面板时用鼠标位置
+        let topLeft = panel.map { NSPoint(x: $0.frame.minX, y: $0.frame.maxY) } ?? NSEvent.mouseLocation
 
         let pad: CGFloat = 14
         let footerH: CGFloat = 36
-        let bottomInset: CGFloat = showCopy ? footerH : pad
+        let bottomInset: CGFloat = showCopy ? footerH + 8 : pad   // +8:正文与分隔线之间的留白
         let font = NSFont.systemFont(ofSize: 14)
         let textColor = isError ? NSColor.systemRed : NSColor.labelColor
 
-        let w: CGFloat = showCopy ? savedPopupSize().width : 420
-        let textW = w - pad * 2
+        // 尺寸自适应:先按上限宽度排版量出自然宽高,再收窄窗口——
+        // 短译文小窗贴身,长译文到上限(记忆尺寸)后内部滚动
+        let maxW: CGFloat = showCopy ? savedPopupSize().width : 420
+        let minW: CGFloat = showCopy ? 220 : 96
 
         // 译文按 markdown 渲染;其它(翻译中/错误)纯文本
         let attr = markdown
-            ? MD.render(message, width: textW, baseFont: font, textColor: textColor)
+            ? MD.render(message, width: maxW - pad * 2, baseFont: font, textColor: textColor)
             : NSAttributedString(string: message, attributes: [.font: font, .foregroundColor: textColor])
+        let natural = measuredTextSize(attr, width: maxW - pad * 2)
+        let w = min(max(natural.width + pad * 2 + 2, minW), maxW)   // +2:防走边缘重排
+        let textW = w - pad * 2
 
-        let contentH = max(20, measuredTextHeight(attr, width: textW))
-        let panelH: CGFloat
-        let visibleH: CGFloat
-        if showCopy {                        // 结果浮窗:记忆固定尺寸,内容滚动
-            panelH = savedPopupSize().height
-            visibleH = max(40, panelH - pad - bottomInset)
-        } else {
-            let screenH = screenFor(NSRect(x: origin.x, y: origin.y, width: w, height: 1)).visibleFrame.height
-            let maxContentH = min(440, screenH - 140)
-            visibleH = min(contentH, maxContentH)
-            panelH = pad + visibleH + bottomInset
-        }
+        let contentH = max(20, natural.height)
+        let vf = screenFor(NSRect(x: topLeft.x, y: topLeft.y - 1, width: 1, height: 1)).visibleFrame
+        let maxContentH = showCopy
+            ? popupHeightCap(vf) - pad - bottomInset
+            : min(440, vf.height - 140)
+        let visibleH = max(40, min(contentH, maxContentH))
+        let panelH = pad + visibleH + bottomInset
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: w, height: panelH))
         if showCopy { container.autoresizingMask = [.width, .height] }
         let scroll = NSScrollView(frame: NSRect(x: pad, y: bottomInset, width: textW, height: visibleH))
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = showCopy || contentH > visibleH
+        scroll.hasVerticalScroller = contentH > visibleH
         scroll.autohidesScrollers = true
         if showCopy { scroll.autoresizingMask = [.width, .height] }
 
@@ -1036,13 +1122,16 @@ final class PopupController: NSObject, NSWindowDelegate {
             addGrip(to: container)
         }
 
-        var rect = NSRect(x: origin.x, y: origin.y, width: w, height: panelH)
+        var rect = NSRect(x: topLeft.x, y: topLeft.y - panelH, width: w, height: panelH)
         rect = clampToScreen(rect)
-        // 结果浮窗(可缩放、container/scroll 带 autoresizing)必须先同步定尺寸再贴内容:
-        // 否则 present 默认帧动画期间 blur 仍是旧的小尺寸(如「翻译中…」),autoresize 以小尺寸为基准
-        // 把内容挤出可视区 → 译文整段不显示(只剩分隔线和「复制」)。会话浮窗同理走 animateFrame:false。
-        present(content: container, rect: rect, animateFrame: !showCopy)
+        present(content: container, rect: rect)
         tv.scrollRangeToVisible(NSRange(location: 0, length: 0))
+    }
+
+    // 内容浮窗自动长高的上限:默认 380;用户手动拉大后按记忆值抬高——只抬高、不压低
+    // (否则一次误缩会把之后所有浮窗都卡成小窗);最终不超过屏幕可视高度
+    private func popupHeightCap(_ vf: NSRect) -> CGFloat {
+        return min(max(savedPopupSize().height, defaultPopupSize.height), vf.height - 12)
     }
 
     private func savedPopupSize() -> NSSize {
@@ -1058,13 +1147,23 @@ final class PopupController: NSObject, NSWindowDelegate {
     private func addGrip(to container: NSView) {
         let g = ResizeGripView(frame: NSRect(x: container.bounds.width - 18, y: 0, width: 18, height: 18))
         g.autoresizingMask = [.minXMargin, .maxYMargin]
-        g.onCommit = { [weak self] in guard let self = self, let p = self.panel else { return }; self.savePopupSize(p.frame.size) }
+        g.onCommit = { [weak self] in
+            guard let self = self, let p = self.panel else { return }
+            self.userResized = true                 // 用户手动定了尺寸:本轮会话不再自动长高
+            self.savePopupSize(p.frame.size)
+        }
         container.addSubview(g)
     }
 
-    // 边缘缩放结束:记住尺寸(仅内容浮窗)
+    // 边缘缩放结束:记住尺寸(仅内容浮窗),并交还尺寸控制权(本轮会话不再自动长高)。
+    // 注意:macOS 26 上 animator().setFrame 的程序化窗口动画也会触发本回调——
+    // 动画中,或和最近一次程序化目标尺寸一致时,都是「假 live resize」,不能当用户操作,
+    // 否则会把动画中间态尺寸写进记忆、并误关自动长高(曾经的真 bug)。
     func windowDidEndLiveResize(_ notification: Notification) {
-        guard panelIsResizable, let p = panel else { return }
+        guard panelIsResizable, let p = panel, frameAnimations == 0 else { return }
+        if abs(p.frame.width - programmaticSize.width) < 2,
+           abs(p.frame.height - programmaticSize.height) < 2 { return }
+        userResized = true
         savePopupSize(p.frame.size)
     }
 
@@ -1099,44 +1198,19 @@ final class PopupController: NSObject, NSWindowDelegate {
         return p
     }
 
-    private func placedRect(near point: NSPoint, w: CGFloat, h: CGFloat) -> NSRect {
-        var rect = NSRect(x: point.x + 8, y: point.y - h - 8, width: w, height: h)
-        rect = clampToScreen(rect)
-        return rect
-    }
-
-    // 把浮窗(及随后展开的会话,按 convoW 宽度预留)定位到选区右侧、顶边对齐选区上沿;
-    // 右侧放不下则放左侧;都放不下则夹紧到屏内。取不到选区坐标时回退到鼠标位置。
+    // 按钮气泡定位(纯几何在 Geometry.swift,可单测):
+    //   有可信选区 → 选区右侧、顶边对齐选区上沿(之后的结果/会话同锚点向下生长);
+    //   无可信选区 → 鼠标释放点上方居中。按钮按自身宽度摆放、贴着选区;
+    //   之后展开的大浮窗若放不下,由 clampToScreen 再横移,不为它提前留空。
     private func buttonRect(w: CGFloat, h: CGFloat, selectionBounds: CGRect?, fallbackPoint: NSPoint) -> NSRect {
         guard let sel = selectionBounds else {
-            // 无选区坐标:放到鼠标右侧、与鼠标大致同高(右侧弹出的近似,而非下方)
             let vf = screenFor(NSRect(x: fallbackPoint.x, y: fallbackPoint.y, width: 1, height: 1)).visibleFrame
-            var x = fallbackPoint.x + 14
-            if x + convoW > vf.maxX - 6 { x = max(vf.minX + 6, fallbackPoint.x - 14 - convoW) }
-            if x < vf.minX + 6 { x = vf.minX + 6 }
-            var y = fallbackPoint.y - h
-            if y + h > vf.maxY - 6 { y = vf.maxY - 6 - h }
-            if y < vf.minY + 6 { y = vf.minY + 6 }
-            return NSRect(x: x, y: y, width: w, height: h)
+            return rectNearPoint(fallbackPoint, visible: vf, w: w, h: h)
         }
         // sel:Quartz 屏幕坐标(左上原点)→ AppKit(左下原点,以主屏高度翻转)
         let primaryH = primaryScreenHeight()
         let selAK = CGRect(x: sel.minX, y: primaryH - sel.maxY, width: sel.width, height: sel.height)
-        let selTop = selAK.maxY          // 选区上沿(AppKit)
-        let gap: CGFloat = 12
-        let vf = screenFor(selAK).visibleFrame
-        // 水平:按会话宽度 convoW 判断能否放右侧
-        var x = selAK.maxX + gap
-        if x + convoW > vf.maxX - 6 {
-            let leftX = selAK.minX - gap - convoW
-            x = leftX >= vf.minX + 6 ? leftX : max(vf.minX + 6, vf.maxX - convoW - 6)
-        }
-        if x < vf.minX + 6 { x = vf.minX + 6 }
-        // 垂直:浮窗顶边对齐选区上沿(会话向下生长);夹紧到屏内
-        var y = selTop - h
-        if y + h > vf.maxY - 6 { y = vf.maxY - 6 - h }
-        if y < vf.minY + 6 { y = vf.minY + 6 }
-        return NSRect(x: x, y: y, width: w, height: h)
+        return rectBesideSelection(selAK, visible: screenFor(selAK).visibleFrame, w: w, h: h)
     }
 
     private func clampToScreen(_ rect: NSRect) -> NSRect {
@@ -1164,7 +1238,8 @@ weak var gAppDelegate: AppDelegate?
 let kDragThreshold: CGFloat = 12   // 提高门槛,过滤点选/微抖动误触
 var gFetchInFlight = false         // 取词互斥(仅在主线程读写):同一时刻只跑一个,避免剪贴板并发竞态
 
-func handleMouseUpAt(dist: CGFloat) {
+func handleMouseUp(down: CGPoint, up: CGPoint) {
+    let dist = hypot(up.x - down.x, up.y - down.y)
     logLine("tap mouseUp dist=\(String(format: "%.1f", dist))")
     if dist < kDragThreshold { return }
     if gFetchInFlight { logLine("  skip: fetch in flight"); return }   // 上一次取词还没完,丢弃这次
@@ -1176,11 +1251,20 @@ func handleMouseUpAt(dist: CGFloat) {
         logLine("  AX=\(axResult?.text ?? "nil") bounds=\(axResult?.bounds.map { "\(Int($0.maxX)),\(Int($0.minY))" } ?? "nil")")
         let text = axResult?.text ?? selectedTextViaCopy()
         logLine("  final=\(text ?? "nil")")
-        let bounds = axResult?.bounds
+        // AX 矩形先过可信性检查:垃圾矩形(整元素 frame / 错位坐标)宁可不用,
+        // 否则浮窗会被顶到窗口右上角(漂移)。不可信 → 退回鼠标释放点定位。
+        var bounds = axResult?.bounds
+        if let b = bounds, !plausibleSelectionBounds(b, down: down, up: up) {
+            logLine("  bounds implausible \(Int(b.width))x\(Int(b.height)) → 用鼠标释放点")
+            bounds = nil
+        }
         DispatchQueue.main.async {
             gFetchInFlight = false
             guard let text = text else { return }
-            gAppDelegate?.popup.showButton(text: text, selectionBounds: bounds, fallbackPoint: NSEvent.mouseLocation)
+            // 兜底锚点用「释放那一刻」的位置(Quartz→AppKit 翻转),
+            // 不用 NSEvent.mouseLocation:取词(尤其 Cmd+C 路径)最长要 ~750ms,期间鼠标一动就漂
+            let upAK = NSPoint(x: up.x, y: primaryScreenHeight() - up.y)
+            gAppDelegate?.popup.showButton(text: text, selectionBounds: bounds, fallbackPoint: upAK)
         }
     }
 }
@@ -1209,12 +1293,10 @@ let gEventCallback: CGEventTapCallBack = { _, type, event, _ in
             }
         }
     } else if type == .leftMouseUp {
-        let dx = loc.x - gDownLoc.x
-        let dy = loc.y - gDownLoc.y
-        let dist = (dx*dx + dy*dy).squareRoot()
+        let down = gDownLoc
         DispatchQueue.main.async {
             if gDownInsidePopup { gDownInsidePopup = false; return }  // 在浮窗里的拖选,不触发新气泡
-            handleMouseUpAt(dist: dist)
+            handleMouseUp(down: down, up: loc)
         }
     }
     return Unmanaged.passUnretained(event)
@@ -1312,9 +1394,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         gAppDelegate = self
         setupMainMenu()
 
-        // UI 截图自测:启动即演示一次解释浮窗(不建事件 tap / 不请求权限),便于截屏验证真实渲染
-        if ProcessInfo.processInfo.environment["POPDICT_UITEST"] != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.popup.runDemoExplain() }
+        // UI 截图自测(不建事件 tap / 不请求权限),便于截屏验证真实渲染:
+        //   POPDICT_UITEST=translate → 翻译流程(本地、不走网络);其它值 → 解释会话流程(走真实 API)
+        if let mode = ProcessInfo.processInfo.environment["POPDICT_UITEST"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                if mode == "translate" { self?.popup.runDemoTranslate() } else { self?.popup.runDemoExplain() }
+            }
             return
         }
 

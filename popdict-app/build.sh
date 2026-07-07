@@ -21,7 +21,7 @@ else
 fi
 
 echo "==> 1/5 编译 universal 二进制 (arm64 + x86_64)"
-SRCS="main.swift Markdown.swift Screenshot.swift Config.swift Settings.swift"
+SRCS="main.swift Geometry.swift Markdown.swift Screenshot.swift Config.swift Settings.swift"
 swiftc $SRCS -target arm64-apple-macos${MIN_OS}  -o /tmp/popdict_arm64 -swift-version 5 -framework AppKit -framework ApplicationServices -framework Carbon -O
 swiftc $SRCS -target x86_64-apple-macos${MIN_OS} -o /tmp/popdict_x86   -swift-version 5 -framework AppKit -framework ApplicationServices -framework Carbon -O
 lipo -create -output /tmp/popdict_uni /tmp/popdict_arm64 /tmp/popdict_x86
