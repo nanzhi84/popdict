@@ -26,6 +26,7 @@ enum MD {
                        .components(separatedBy: "\n")
         var i = 0
         var para: [String] = []
+        var listIndents: [Int] = []   // 嵌套列表的缩进栈:把「前导空格数」动态映射成层级
 
         func flushPara() {
             guard !para.isEmpty else { return }
@@ -42,6 +43,11 @@ enum MD {
         while i < lines.count {
             let line = lines[i]
             let t = line.trimmingCharacters(in: .whitespaces)
+
+            // 非列表的内容行会终结当前列表:清空缩进栈,下一个列表重新计层。
+            // 空行不清(宽松列表:模型常在列表项之间留空行)。
+            let itemParsed = listItem(line)
+            if itemParsed == nil, !t.isEmpty { listIndents.removeAll() }
 
             // 代码块
             if t.hasPrefix("```") {
@@ -91,10 +97,14 @@ enum MD {
                 out.append(quoteAttr(q, baseFont: baseFont, color: textColor))
                 i += 1; continue
             }
-            // 列表项
-            if let item = listItem(line) {
+            // 列表项:层级由缩进栈决定——比上一项缩得更深就进一层,变浅就弹栈回退。
+            // 不做「除以固定空格数」的猜测,兼容 2/3/4 空格与 tab 的各种缩进风格
+            // (模型常用 4 空格,旧算法「÷2」会把一层嵌套算成两层,缩进大得离谱)。
+            if let item = itemParsed {
                 flushPara()
-                out.append(listAttr(item, baseFont: baseFont, color: textColor))
+                while let last = listIndents.last, item.leading < last { listIndents.removeLast() }
+                if listIndents.isEmpty || item.leading > listIndents.last! { listIndents.append(item.leading) }
+                out.append(listAttr(item, level: listIndents.count - 1, baseFont: baseFont, color: textColor))
                 i += 1; continue
             }
             // 普通段落(连续非空行合并为一段)
@@ -199,12 +209,19 @@ enum MD {
 
     // MARK: 列表
 
-    private struct Item { let level: Int; let marker: String; let text: String }
+    private struct Item { let leading: Int; let marker: String; let text: String }
 
     private static func listItem(_ line: String) -> Item? {
-        let leading = line.prefix(while: { $0 == " " }).count
-        let s = String(line.dropFirst(leading))
-        let level = leading / 2
+        // 前导空白宽度:空格 1、tab 按 4 算(层级由 render 的缩进栈决定,这里只报宽度)
+        var leading = 0
+        var start = line.startIndex
+        while start < line.endIndex {
+            if line[start] == " " { leading += 1 }
+            else if line[start] == "\t" { leading += 4 }
+            else { break }
+            start = line.index(after: start)
+        }
+        let s = String(line[start...])
         // 无序(含任务列表 [ ] / [x])
         if let first = s.first, "-*+".contains(first) {
             let rest = s.dropFirst()
@@ -213,7 +230,7 @@ enum MD {
                 var marker = "•"
                 if text.hasPrefix("[ ] ") { marker = "☐"; text = String(text.dropFirst(4)) }
                 else if text.lowercased().hasPrefix("[x] ") { marker = "☑"; text = String(text.dropFirst(4)) }
-                return Item(level: level, marker: marker, text: text)
+                return Item(leading: leading, marker: marker, text: text)
             }
         }
         // 有序 1. / 1)(保留原始标点风格)
@@ -224,14 +241,14 @@ enum MD {
             let punct = String(s[idx])
             let after = s.index(after: idx)
             if after < s.endIndex, s[after] == " " {
-                return Item(level: level, marker: digits + punct, text: String(s[after...].drop(while: { $0 == " " })))
+                return Item(leading: leading, marker: digits + punct, text: String(s[after...].drop(while: { $0 == " " })))
             }
         }
         return nil
     }
 
-    private static func listAttr(_ item: Item, baseFont: NSFont, color: NSColor) -> NSAttributedString {
-        let indent = 18 + CGFloat(item.level) * 18
+    private static func listAttr(_ item: Item, level: Int, baseFont: NSFont, color: NSColor) -> NSAttributedString {
+        let indent = 18 + CGFloat(level) * 18
         let p = NSMutableParagraphStyle()
         p.lineSpacing = 4
         p.paragraphSpacing = 4
